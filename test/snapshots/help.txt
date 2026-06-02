@@ -1,0 +1,475 @@
+
+╔══════════════════════════════════════════════════════════════╗
+║                    dehoard  reclaimer                       ║
+╚══════════════════════════════════════════════════════════════╝
+
+USAGE   (preview-by-default: NOTHING is deleted without --apply)
+  dehoard                          → PREVIEW Tier 1 (always-safe) cleanup
+  dehoard --apply                  → actually reclaim Tier 1 space
+  dehoard --deep                   → + Tier 2 aggressive caches (preview)
+  dehoard --models                 → + interactive LLM/ML model cleanup
+  dehoard --scan                   → + interactive project artifact scan
+  dehoard --report                 → read-only disk audit (what's eating space)
+    ↳ bare 'dehoard' PREVIEWS the cleanup; '--report' AUDITS your disk. Neither deletes.
+  dehoard --deep --models --scan --apply → everything, for real
+
+FLAGS
+  --apply         actually delete (default is preview-only)
+  --dry-run       force preview, overrides --apply and DEHOARD_APPLY_DEFAULT
+  --yes / -y      auto-confirm every prompt (combine with --apply; use with care)
+  --report        read-only audit; never deletes
+  --json          machine-readable model inventory (implies --report; pure JSON on stdout)
+                  e.g. dehoard --json | jq '.cross_tool_duplicates'
+  --list-ignored       show paths you've marked 'always skip'
+  --unignore <path>    remove one path from the always-skip list
+  --reset-ignore       clear the entire always-skip list and re-prompt everything
+  --version / -V       print version and exit
+
+Flags combine in any order. Without --apply, every run is a safe preview.
+Recommended: run once to preview, then add --apply. Tier 1 always runs first.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TIER 1: Runs always. Zero consequences. Safe to run anytime.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  1. Browser update clones
+     Chromium-based browsers (Chrome, Brave, Arc, Edge, Vivaldi, …) silently
+     clone themselves to a temp dir during updates for code signing. These
+     are supposed to self-delete but often never do, accumulating 5+ GB.
+     Script deletes: ${BASE}/X/*.code_sign_clone  (any browser, not hardcoded)
+     → Close your browser before running to avoid file-in-use errors.
+
+  2. Screenshot temp dirs (NSIRD_screencaptureui_*)
+     Every macOS screenshot session creates a staging folder under
+     TMPDIR/TemporaryItems/. These are never cleaned up by the OS.
+     Completely safe to delete, they're already closed sessions.
+
+  3. Stale app temp files (TMPDIR)
+     Microsoft Edge updater leftovers, VS Code CPU profiler dumps,
+     Java perf data (hsperfdata_*), node compile cache, Xcode CLI
+     cache, VS Code feedback logs. All are orphaned and never reused.
+
+  4. Browser helper caches in var/folders
+     macOS stores per-app render caches under /private/var/folders.
+     Cleaned: Chrome / Brave / Edge browser helper caches (universal).
+     Every browser rebuilds these on next launch with no slowdown.
+     Other per-app caches are handled by --deep / the --scan cache sweep.
+
+  5. Package manager caches
+     brew cleanup -s --prune=all → old Homebrew formula versions + download cache
+     brew autoremove             → removes Homebrew orphan dependencies
+     npm cache clean             → clears npm download cache
+     pnpm store prune            → removes unreferenced pnpm packages
+     yarn cache clean            → clears Yarn download cache
+     pip / pip3.7-3.25 purge     → clears wheel cache for all Python versions
+     uv cache clean              → clears uv's package/wheel cache
+     bun pm cache rm             → clears Bun's install cache
+     trunk cache prune           → clears Trunk linter/tool cache
+     In all cases: your installed packages are NOT removed.
+     Only cached downloads are cleared. Re-installs are slower once.
+
+  6. node-gyp cache (~/Library/Caches/node-gyp)
+     node-gyp downloads C header files to compile native Node modules.
+     These are permanently cached even after the module is installed.
+     Rebuilt automatically on the next native npm install.
+
+  6b. Node.js compile cache (~/.cache/node)
+     Node.js caches native addon compilation results. Pure cache.
+
+  6c. fontconfig cache (~/.cache/fontconfig)
+     Font rendering lookup database. Rebuilt by apps on next launch.
+
+  6d. npx binary cache (~/.npm/_npx)
+     npx caches downloaded executables (e.g. create-react-app, ts-node)
+     separately from npm's package cache. npm cache clean does not touch it.
+     Re-downloaded transparently on next npx invocation.
+
+  6e. CPAN module cache (~/.cpan/build, ~/.cpan/sources)
+     Perl's CPAN caches downloaded module tarballs and build intermediates.
+     Pure cache, re-downloaded on next 'cpan install Module::Name'.
+
+  6f. Selenium WebDriver cache (~/.cache/selenium)
+     Selenium's manager downloads ChromeDriver and other WebDriver binaries
+     here. Pure cache, re-downloaded automatically on next test run.
+
+  7. Go module download cache (~/go/pkg/mod/cache)
+     Go caches every downloaded module dependency here. Pure cache,
+     equivalent to npm's ~/.npm or pip's wheel cache.
+     Re-downloaded automatically on next 'go build' or 'go get'.
+     Uses 'go clean -modcache' when Go is available, else rm directly.
+
+  8. Cargo download caches (~/.cargo/registry/cache, /src, /git/checkouts)
+     Rust/Cargo caches downloaded .crate files and their unpacked sources.
+     registry/cache  → compressed .crate tarballs (re-downloaded on next build)
+     registry/src    → unpacked crate sources   (re-extracted on next build)
+     git/checkouts   → working copies of git-sourced deps (re-cloned on next build)
+     registry/index is preserved to avoid a slow re-index.
+     No-op if ~/.cargo does not exist.
+
+  8b. Gradle caches (~/.gradle/caches, ~/.gradle/daemon)
+     Gradle build system caches downloaded artifacts and daemon logs.
+     ~/.gradle/wrapper/dists (Gradle distributions) is preserved.
+     Re-downloaded on next Gradle build.
+
+  8c. Maven local repository (~/.m2/repository)
+     Maven caches ALL downloaded JARs here. Pure cache, re-downloaded
+     on next 'mvn' invocation. Can be 2-20 GB on active Java projects.
+
+  8d. NuGet package cache (~/.nuget/packages)
+     .NET's global package cache. Re-downloaded on next 'dotnet restore'.
+     Note: ~/.dotnet (the SDK itself) is deliberately NOT touched.
+
+  9. Jupyter checkpoint dirs (.ipynb_checkpoints)
+     Jupyter saves a checkpoint copy of every open notebook every
+     few minutes into a hidden .ipynb_checkpoints folder. When you
+     close the notebook, the checkpoints are never deleted.
+     These are NOT your actual notebooks, your .ipynb files are safe.
+     Searched in: ~/Documents, ~/src
+
+ 10. Old installer DMGs in ~/Downloads (>30 days old, >50 MB)
+     .dmg files are disk images used to install apps. Once installed,
+     the .dmg serves no purpose. Script only removes .dmg files that
+     are more than 30 days old AND larger than 50 MB.
+     Prints the filename and size before deleting each one.
+
+ 11. Trash and iOS crash logs
+     Empties ~/.Trash completely.
+     Deletes old iPhone/iPad crash reports from:
+       ~/Library/Logs/CrashReporter/MobileDevice/
+
+ 12. Time Machine local snapshots (all but latest)
+     macOS takes hourly local snapshots even without an external
+     backup drive connected. They accumulate silently.
+     Tier 1 deletes all but the newest snapshot, which is kept as
+     a safety net in case you delete something before your next backup.
+     Requires sudo (for tmutil). You'll be prompted for your password.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TIER 2: Only with --deep. There is a real cost after deletion.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  1. All user Library caches (~/Library/Caches/*)
+     Wipes everything: browsers, Spotlight, system services, Spotify,
+     all apps. Each app has to rebuild its cache from scratch.
+     Expect the system to feel sluggish for 10-30 minutes after.
+     On subsequent runs, the system feels normal again.
+
+  2. Clang module cache (var/folders/C/clang)
+     Clang pre-compiles headers to speed up C/C++/Swift/Objective-C
+     builds. Clearing this means the first compile after is noticeably
+     slower. Subsequent builds are fast again.
+
+  3. Python bytecode cache (var/folders/C/org.python.python)
+     Python compiles .py files to .pyc bytecode the first time they
+     run. This is the system-level cache for that. After deletion,
+     every module import is slightly slower until Python re-caches.
+
+  4. Metal GPU shader cache (var/folders/C/com.apple.metal)
+     macOS pre-compiles GPU programs (shaders) for every app that uses
+     Metal (games, video editors, 3D tools). After deletion, shaders
+     recompile on next launch, you may see brief stuttering or lag
+     in GPU-heavy apps until they warm up.
+
+  5. macOS system Apple caches (own user only)
+     Clears com.apple.* cache dirs in your var/folders path only.
+     Scoped to your own UID, does not touch other users on the machine.
+     Requires sudo.
+
+  6. Xcode DerivedData (~/Library/Developer/Xcode/DerivedData)
+     All compiled Xcode build products. If you have any Xcode projects,
+     the next build after this will be a full clean compile.
+     No data loss, source code is untouched.
+
+  7. Docker system prune + builder prune
+     system prune: stopped containers, dangling images, unused networks.
+     builder prune -af: ALL build cache (often the biggest hidden win).
+     Does NOT remove: named volumes, running containers, or images
+     referenced by any container. Can free 10-50+ GB.
+     Also reports the Docker/OrbStack/Colima VM disk image size and how
+     to compact it (those .raw/.img files never shrink after prune).
+     Skipped silently if Docker daemon is not running.
+
+  8. HuggingFace cache (~/.cache/huggingface)
+     All downloaded model weights, tokenizers, and datasets.
+     Models re-download automatically on next use, no code changes.
+     Tip: run 'huggingface-cli delete-cache' before this for a
+     picker UI where you can select specific models to keep.
+
+  9. Playwright + Puppeteer browser binaries
+     Playwright: ~/Library/Caches/ms-playwright (covered by Caches/* above)
+     Puppeteer:  ~/.cache/puppeteer, Chrome + headless-shell binaries
+     Both are browser runtimes for automated testing.
+     Restore: npx playwright install  /  npx puppeteer browsers install
+
+ 10. Unavailable iOS simulators + CoreSimulator cache
+     Runs 'xcrun simctl delete unavailable' to remove simulator runtimes
+     for iOS versions you no longer have installed. Never deletes active
+     simulators. Also clears ~/Library/Developer/CoreSimulator/Caches.
+     No-op if Xcode / xcrun is not installed.
+
+ 10b. VSCode + Cursor Application Support caches
+     CachedExtensionVSIXs/ → downloaded extension packages
+     CachedData/           → compiled extension JS
+     Cache/                → Chromium renderer cache
+     logs/ + Crashpad/     → diagnostic logs and crash reports
+     All regenerate on next launch. User/ and WebStorage/ are NOT touched.
+
+ 10c. Discord Application Support cache
+     ~/Library/Application Support/Discord/Cache, Electron media cache.
+     Rebuilds on next Discord launch.
+
+ 10d. ccache (C/C++ compiler cache, ~/.ccache)
+     Caches compiled object files to speed up C/C++ rebuilds.
+     Clearing it means the NEXT build is a full recompile (slow).
+     Only cleared if ccache binary is present.
+
+ 10e. Android SDK system-images (informational)
+     ~/Library/Android/sdk/system-images/, emulator OS images.
+     Each API level × ABI is 1-3 GB. Shows installed versions and sizes.
+     Removal: sdkmanager --uninstall or Android Studio SDK Manager.
+     Use --scan to interactively remove per API level.
+
+ 11. Git repository GC (repos with .git > 100 MB)
+     Runs 'git gc --prune=2.weeks.ago' inside each large repo.
+     Compresses loose objects, optimizes pack files, removes stale
+     refs. Unreachable objects (e.g. from recent git reset --hard) are
+     preserved for 2 weeks, the same as git's own default.
+     No loss of reachable commits. Typically 30s-2 min per repo.
+     Roots: $GIT_GC_ROOTS (configurable in USER CONFIG at top of script).
+
+ 12. Last Time Machine snapshot
+     Removes the final local snapshot that Tier 1 preserved.
+     After this, you have zero local recovery until macOS creates
+     a new snapshot (happens automatically in ~1 hour).
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MODELS (--models): Interactive. Shows each item, you decide.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  How it works:
+    Each section lists its contents with individual sizes, then
+    asks 'Delete all? [y/N]'. Type y then Enter to delete, or
+    just Enter (or anything else) to skip. Defaults to No.
+    If run non-interactively (piped/scripted), always skips.
+
+  1. Ollama models (~/.ollama/models)
+     Runs 'ollama list' to show installed models and their sizes.
+     If you confirm, deletes all models via 'ollama rm <model>'.
+     Re-download any model: ollama pull <model-name>
+
+  2. LM Studio .gguf files (~/.lmstudio/models/)
+     Scans for all *.gguf model files recursively and lists each
+     one with its size (e.g. 6.9G MythoMax, 4.4G Dolphin).
+     If confirmed, deletes all .gguf files.
+     Re-download: use the LM Studio app's model browser.
+
+  3. HuggingFace cache (~/.cache/huggingface)
+     Shows total cache size, then per-model and per-dataset breakdown.
+     If confirmed, wipes the entire cache directory.
+     Models re-download on next use, no code changes needed.
+     Skipped if --deep already cleared it in this same run.
+
+  4. NLTK corpora (~/nltk_data)
+     NLTK downloads language corpora here (punkt, movie_reviews, etc.).
+     Re-download any corpus: python -c "import nltk; nltk.download('name')"
+
+  5. PyTorch Hub model cache (~/.cache/torch)
+     torch.hub.load() caches model weights here, same concept as
+     HuggingFace cache. Re-downloads on next torch.hub.load() call.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SCAN (--scan): Crawls your project tree. Per-entry prompts.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  How it works:
+    Searches ~/Documents, ~/src, ~/Desktop, and ~ for known artifact
+    patterns. IDE directories (Cursor, VSCode, Trae, Antigravity),
+    ~/.cache, ~/Library, and venv internals are excluded so you only
+    see your own project files.
+
+    For environments (venvs, conda envs, node_modules): shows each
+    entry with its size in MB and last-modified date, then prompts
+    per entry. Type y then Enter to delete, or just Enter to keep.
+
+    For batch-safe artifacts (caches, temp files, OS junk): counts
+    all instances and shows total size, then single prompt to delete
+    all, because every single one is auto-regenerated and keeping
+    individual ones has no value.
+
+  Items scanned:
+
+  ── Python environments (ANY folder name) ── PER ENTRY
+     Detected by content (presence of pyvenv.cfg), not by folder name,
+     so it catches .venv, venv, env, deploy-env, client_venv.x, etc.
+     App-bundled runtimes (.lmstudio, .ollama) are excluded so the scan
+     never offers to delete a Python env that belongs to an installed app.
+     Recreate: python -m venv .venv / uv sync / poetry install
+
+  ── Conda environments ── PER ENTRY
+     Environments under ~/miniconda3, ~/anaconda3, ~/mambaforge, ~/.conda.
+     Each shown with size and last-modified date. Per-entry prompt.
+     Uses 'conda env remove' when available (cleans registry too).
+     Recreate: conda create -n <name> python=3.x
+
+  ── uv Python installations ── PER ENTRY
+     Standalone Python interpreters downloaded by uv (separate from Homebrew).
+     Stored in ~/.local/share/uv/python/ by default.
+     Removed via 'uv python uninstall cpython-X.Y.Z'.
+     Reinstall: uv python install <version>
+
+  ── Android SDK system-images ── PER ENTRY
+     Android emulator OS images, shown per API / tag / ABI (1-3 GB each).
+     Old API levels you no longer target are safe to remove.
+     Uses sdkmanager --uninstall when found (under cmdline-tools/ or
+     tools/), else rm directly. Empty API/tag dirs are pruned after.
+
+  ── VS Code-family stale extension versions ── BATCH (per editor)
+     Detects ANY VS Code fork generically (by extensions/.obsolete),
+     .vscode, .cursor, .windsurf, .trae, future forks. No names hardcoded.
+     Deletes ONLY versions the editor itself flagged stale in .obsolete;
+     never computes 'newest', never touches the active version or
+     extensions.json. Safe even while the editor is running.
+
+  ── JVM heap dumps (*.hprof) ── PER ENTRY
+     Created by JVM crashes (OutOfMemoryError). Can be 1-16 GB each.
+     Safe to delete, no project data, only a crash snapshot.
+
+  ── ROS2 colcon workspace artifacts ── PER WORKSPACE
+     build/ install/ log/ dirs created by 'colcon build'.
+     Detected by presence of sibling src/ directory (standard ROS2 layout).
+     Recreate: cd <workspace> && colcon build
+
+  ── IPython command history ── PER ENTRY (⚠️  WARNING)
+     ~/.ipython/profile_default/history.sqlite, your IPython command history.
+     This is NOT cache, it is your personal command history.
+     Deleting is permanent. Shown here only so you can decide consciously.
+
+  ── node_modules directories ── PER ENTRY
+     Installed JavaScript dependencies. Safe to delete from any project.
+     Recreate with: npm install  (or yarn / pnpm install)
+     IDE extension node_modules are excluded.
+
+  ── Python build/test caches ── BATCH
+     __pycache__   → compiled .pyc bytecode, regenerated on next run
+     .pytest_cache → pytest result cache, regenerated on next test run
+     .mypy_cache   → mypy type-check cache, regenerated on next mypy run
+     .ruff_cache   → ruff lint cache, regenerated on next ruff run
+     All are completely safe to batch delete. Single y/N prompt.
+
+  ── Stray .pyc / .pyo files ── BATCH
+     Compiled bytecode files that ended up outside a __pycache__ dir.
+     Happens with old Python 2 projects or certain build tools.
+     Regenerated automatically by Python on next import.
+
+  ── Python packaging artifacts ── BATCH
+     *.egg-info  → created by 'pip install -e .' (editable installs)
+     Only those outside .venv and site-packages are shown.
+     Safe to delete, regenerated on next 'pip install -e .'
+
+  ── Rust build artifacts (target/) ── PER ENTRY
+     Cargo stores all compiled output in target/. Debug builds are
+     3-15 GB each. Validated by a sibling Cargo.toml, only real
+     Rust projects are shown. Prefer 'cargo clean' when available.
+     Recreate: cargo build (re-compiles from source automatically).
+
+  ── Python/JS/C++ build outputs ── BATCH
+     dist/                  → built wheels, tarballs, bundled JS
+     build/                 → CMake, setuptools intermediate files
+     cmake-build-debug/     → CLion CMake debug build
+     cmake-build-release/   → CLion CMake release build
+     cmake-build-relwithdebinfo/ / cmake-build-minsizerel/ → same
+     node_modules internals (e.g. three/build, gsap/dist) are excluded.
+     WARNING: some projects commit dist/ for releases, review the
+     list before confirming. All are regenerated by the build tool.
+
+  ── Python test/coverage artifacts ── BATCH
+     .coverage      → raw coverage data from 'pytest --cov'
+     .coverage.*    → parallel coverage data files
+     coverage.xml   → coverage report for CI/codecov
+     htmlcov/       → HTML coverage report directory
+     .hypothesis/   → Hypothesis property-testing example database
+     .tox/          → tox virtualenvs and build artifacts
+     .nox/          → nox session virtualenvs
+     All regenerated on next test run.
+
+  ── R session artifacts ── BATCH
+     .RData     → R workspace snapshot (saved variables from session)
+     .Rhistory  → R command history
+     .Rapp.history → R GUI command history
+     Rplots.pdf → auto-generated by R when plotting without a device
+     WARNING: .RData can contain work you care about. The prompt
+     will list files before asking, review before confirming.
+
+  ── LaTeX compilation artifacts ── BATCH
+     .aux .toc .lot .lof        → table of contents / cross-ref data
+     .bbl .blg                  → BibTeX bibliography files
+     .nav .snm                  → Beamer presentation files
+     .fls .fdb_latexmk          → latexmk tracking files
+     .synctex.gz                → SyncTeX editor sync file
+     All are regenerated on next LaTeX compile. Your .tex is untouched.
+
+  ── macOS system junk files ── BATCH
+     .DS_Store    → Finder folder view settings, useless outside macOS
+     ._*          → AppleDouble resource fork files, useless on non-HFS
+     .AppleDouble → legacy resource fork directory
+     Thumbs.db    → Windows thumbnail cache (shouldn't be on Mac)
+     desktop.ini  → Windows folder config (shouldn't be on Mac)
+     Safe to delete unconditionally.
+
+  ── Editor swap and backup files ── BATCH
+     *.swp *.swo  → Vim swap files (crash recovery, usually orphaned)
+     *~           → Emacs/nano backup files
+     *.orig       → conflict resolution originals (from git merge)
+     *.bak        → generic backup files left by various tools
+     Review before deleting if you have in-progress edits in Vim.
+
+  ── Project log files (>100 KB) ── PER ENTRY
+     Application logs, Docker build logs, server logs inside projects.
+     Shows each with size and path. Prompts per entry.
+     Does NOT touch system logs (~/Library/Logs is excluded).
+
+  ── AI / local-model tool caches ── PER TOOL
+     ComfyUI, Automatic1111, Claude Code, Codex, n8n, openclaw, MATLAB, etc.
+     Cleans ONLY regenerable temp/cache. Your models, generated outputs,
+     chat/session history, and workflow DBs are shown as 'kept (user data)'
+     and NEVER deleted. Model weights are handled separately in --models.
+     MATLAB: clears logs, crash dumps, and download caches only. The installed
+     ServiceHost runtime is left alone (deleting it just forces a re-download on
+     next launch), and your prefs, command history, Add-Ons, license, and
+     ~/Documents/MATLAB are kept. No re-download or re-login.
+
+  ── Orphaned dev/ML tool data ── PER ENTRY
+     Leftover data dirs of dev/ML tools whose binary/app is gone (e.g.
+     ~/.ollama after Ollama is removed). Conservative: only flags tools
+     reliably detectable as absent. For GENERAL app-uninstall leftovers,
+     use Pearcleaner, dehoard does not scan all of ~/Library.
+
+  ── Tool caches >100 MB (~/.cache, ~/Library/Caches) ── PER ENTRY
+     Generic catch-all. Instead of enumerating every language's cache dir
+     by name, it size-ranks everything in ~/.cache and ~/Library/Caches
+     over 100 MB and prompts per entry. This covers every tool, including
+     ones no rule lists and ones that don't exist yet (e.g. trunk,
+     codex-runtimes, JetBrains).
+     Anything already cleared by Tier 1 / --deep / --models earlier in the
+     same run won't reappear here. All regenerate; some re-download slowly.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  • Close Chrome and Brave before running (for clone deletion)
+  • You will be prompted for sudo password once (for tmutil)
+  • Do NOT run as: sudo zsh dehoard.sh, breaks Homebrew/npm/pip
+  • Safe to run repeatedly, missing paths are silently skipped
+  • Free space is measured before and after; shown at the end
+  • --dry-run works with any flag combo, shows what would be
+    deleted without touching any files
+  • --yes / -y auto-confirms every prompt, run --yes --dry-run
+    first to review what will be deleted before committing
+  • --report is read-only: ranks your biggest dirs + flags which are
+    regenerable caches (and which flag clears each), a per-editor table
+    (size + idle time), a local model-weight inventory across HF/Ollama/
+    LM Studio/PyTorch, and POTENTIAL cross-tool duplicate models (same
+    model in 2+ tools → est. reclaim). Matched by name → verify before
+    removing (Q4≠Q8); never auto-deleted. Deletes nothing.
+
+Provided "as is", without warranty (MIT). Deletion is real rm, preview first;
+you are responsible for what you delete. See LICENSE.
+

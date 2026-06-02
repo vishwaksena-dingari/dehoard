@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  syntax:
+    # zsh script → use zsh's own parser as the source of truth.
+    # (ShellCheck doesn't support zsh, so we don't run it on dehoard.sh.)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: zsh syntax check
+        run: zsh -n dehoard.sh
+      - name: behavioral tests (fixture $HOME, proves --apply is safe)
+        run: zsh test/run.zsh
+      - name: no hardcoded personal paths
+        run: |
+          if grep -nE '/Users/[a-z]|/home/[a-z]' dehoard.sh; then
+            echo "::error::hardcoded user paths found"; exit 1
+          fi

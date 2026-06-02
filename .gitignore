@@ -1,0 +1,18 @@
+# internal working docs, not for distribution
+CLAUDE.md
+STATUS.md
+temp.txt
+cleanup.sh
+
+# local logs dehoard writes when --apply is used
+.cache/
+*.log
+# macOS
+.DS_Store
+# editor
+.vscode/
+.idea/
+# OS/editor duplicates & backups (e.g. Finder "X copy.sh", *.bak)
+* copy.*
+*.bak
+*~

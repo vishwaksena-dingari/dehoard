@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "generated_by": "dehoard",
+  "generated_at": "@DATE@",
+  "models": [{"tool":"HF","name":"meta-llama/Meta-Llama-3-8B-Instruct-Q8","family":"llama-8b","quant":"q8","variant":"instruct","size_bytes":3072000,"path":"@HOME@/.cache/huggingface/hub/models--meta-llama--Meta-Llama-3-8B-Instruct-Q8"},{"tool":"LMStudio","name":"Meta-Llama-3-8B-Instruct-Q8_0","family":"llama-8b","quant":"q8","variant":"instruct","size_bytes":2560000,"path":"@HOME@/.lmstudio/models/a/llama/Meta-Llama-3-8B-Instruct-Q8_0.gguf"},{"tool":"HF","name":"mistralai/Mistral-7B","family":"mistral-7b","quant":null,"variant":"base","size_bytes":2048000,"path":"@HOME@/.cache/huggingface/hub/models--mistralai--Mistral-7B"},{"tool":"LMStudio","name":"Mistral-7B-Instruct-Q4_K_M","family":"mistral-7b","quant":"q4","variant":"instruct","size_bytes":1536000,"path":"@HOME@/.lmstudio/models/b/mistral/Mistral-7B-Instruct-Q4_K_M.gguf"}],
+  "cross_tool_duplicates": [{"family":"llama-8b","copies":2,"tools":["HF","LMStudio"],"total_bytes":5632000,"reclaim_bytes":2560000,"entries":[{"tool":"HF","name":"meta-llama/Meta-Llama-3-8B-Instruct-Q8","size_bytes":3072000,"quant":"q8","variant":"instruct","path":"@HOME@/.cache/huggingface/hub/models--meta-llama--Meta-Llama-3-8B-Instruct-Q8"},{"tool":"LMStudio","name":"Meta-Llama-3-8B-Instruct-Q8_0","size_bytes":2560000,"quant":"q8","variant":"instruct","path":"@HOME@/.lmstudio/models/a/llama/Meta-Llama-3-8B-Instruct-Q8_0.gguf"}]}],
+  "related_variants": [{"family":"mistral-7b","builds":2,"tools":["HF","LMStudio"],"total_bytes":3584000,"entries":[{"tool":"HF","name":"mistralai/Mistral-7B","size_bytes":2048000,"quant":null,"variant":"base","path":"@HOME@/.cache/huggingface/hub/models--mistralai--Mistral-7B"},{"tool":"LMStudio","name":"Mistral-7B-Instruct-Q4_K_M","size_bytes":1536000,"quant":"q4","variant":"instruct","path":"@HOME@/.lmstudio/models/b/mistral/Mistral-7B-Instruct-Q4_K_M.gguf"}]}],
+  "total_reclaim_bytes": 2560000
+}
