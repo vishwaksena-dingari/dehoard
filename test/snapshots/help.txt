@@ -17,6 +17,8 @@ FLAGS
   --apply         actually delete (default is preview-only)
   --dry-run       force preview, overrides --apply and DEHOARD_APPLY_DEFAULT
   --yes / -y      auto-confirm every prompt (combine with --apply; use with care)
+  --pick          interactive multiselect of --scan candidates via fzf (implies --scan; needs fzf
+                  installed and --apply; falls back to per-item prompts if fzf is absent)
   --report        read-only audit; never deletes
   --json          machine-readable model inventory (implies --report; pure JSON on stdout)
                   e.g. dehoard --json | jq '.cross_tool_duplicates'

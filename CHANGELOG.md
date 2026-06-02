@@ -3,6 +3,16 @@
 All notable changes to `dehoard` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **`--pick`: interactive multiselect of `--scan` candidates via `fzf`.** Mark what to delete with
+  TAB; dehoard then prints the chosen set back and asks once before removing anything (each path still
+  re-validated through `_rm`). Cancel or an empty selection deletes nothing, so "keep all my logs and
+  `.bak`" is simply leaving them unmarked. Covers the Python venv, `node_modules`, project-log, and
+  backup/swap-file scan sections. `fzf` is optional, not a required dependency: without it, `--pick`
+  falls back to the per-item prompts.
+
 ## [0.1.1]: 2026-06-02
 
 ### Fixed

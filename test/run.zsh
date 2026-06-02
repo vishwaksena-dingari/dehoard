@@ -532,6 +532,74 @@ else
 fi
 rm -rf "$FIX"
 
+# 5A, --scan --pick (fzf multiselect): a selection deletes the chosen venvs; an aborted/empty
+#       selection deletes NOTHING (the safety contract); no fzf falls back to per-item prompts.
+#       fzf is stubbed; DEHOARD_FORCE_PICKER=1 lifts the TTY gate for the hermetic run.
+_mk_two_venvs() {  # $1 = HOME fixture
+  mkdir -p "$1/p1/.venv/bin" "$1/p2/env/bin"
+  echo "home = /x" > "$1/p1/.venv/pyvenv.cfg"; echo "home = /x" > "$1/p2/env/pyvenv.cfg"
+  : > "$1/p1/.venv/bin/python"; : > "$1/p2/env/bin/python"
+}
+# (a) selection: stub fzf = `cat` (echoes all input records back = select everything) → both deleted
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+print -r -- $'#!/bin/sh\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
+_mk_two_venvs "$FIX"
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+  zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
+[[ ! -d "$FIX/p1/.venv" && ! -d "$FIX/p2/env" ]] \
+  && ok "--pick: fzf-selected venvs are deleted (multiselect → _rm)" \
+  || bad "--pick: selected venvs were not deleted"
+rm -rf "$FIX"
+# (b) ABORT (the critical one): stub fzf emits nothing → NOTHING is deleted, even under --apply --yes
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+print -r -- $'#!/bin/sh\nexit 0' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
+_mk_two_venvs "$FIX"
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+  zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
+[[ -d "$FIX/p1/.venv" && -d "$FIX/p2/env" ]] \
+  && ok "--pick abort/empty selection deletes NOTHING (safety contract holds)" \
+  || bad "--pick abort DELETED a venv (safety contract broken!)"
+rm -rf "$FIX"
+# (c) no fzf → falls back to the per-item _ask prompts (still deletes under --yes)
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+rm -f "$STUBDIR/fzf" 2>/dev/null              # ensure fzf is absent
+_mk_two_venvs "$FIX"
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" \
+  zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
+[[ ! -d "$FIX/p1/.venv" && ! -d "$FIX/p2/env" ]] \
+  && ok "--pick with no fzf falls back to per-item prompts (deleted under --yes)" \
+  || bad "--pick no-fzf fallback did not delete via _ask"
+rm -rf "$FIX"
+
+# 5B, --pick now also covers node_modules, project logs (>100 KB), and backup/swap files. Same
+#      contract: a selection deletes the chosen items; abort/empty keeps them ALL (so "keep my logs
+#      and .bak" = just don't mark them, or Esc).
+_mk_pick3() {  # $1 = HOME fixture: a node_modules, a >100KB log, a .bak
+  mkdir -p "$1/proj/node_modules/x"; : > "$1/proj/node_modules/x/f"
+  dd if=/dev/zero of="$1/proj/big.log" bs=1024 count=200 2>/dev/null   # >100K so it's scanned
+  : > "$1/proj/notes.bak"
+}
+# (a) selection (stub fzf = cat): node_modules + log + bak all deleted
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+print -r -- $'#!/bin/sh\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
+_mk_pick3 "$FIX"
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+  zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
+[[ ! -d "$FIX/proj/node_modules" && ! -f "$FIX/proj/big.log" && ! -f "$FIX/proj/notes.bak" ]] \
+  && ok "--pick covers node_modules + logs + backups (selected items deleted)" \
+  || bad "--pick did not delete across node_modules/logs/backups"
+rm -rf "$FIX"
+# (b) abort (stub fzf emits nothing): node_modules + log + bak all KEPT
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+print -r -- $'#!/bin/sh\nexit 0' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
+_mk_pick3 "$FIX"
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+  zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
+[[ -d "$FIX/proj/node_modules" && -f "$FIX/proj/big.log" && -f "$FIX/proj/notes.bak" ]] \
+  && ok "--pick abort keeps node_modules + logs + backups (keep-logs/bak by not marking them)" \
+  || bad "--pick abort deleted something across node_modules/logs/backups!"
+rm -rf "$FIX"
+
 # 6, syntax
 zsh -n "$SCRIPT" && ok "zsh -n syntax clean" || bad "syntax error"
 

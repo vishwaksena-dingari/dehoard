@@ -67,6 +67,8 @@ FLAGS
   --apply         actually delete (default is preview-only)
   --dry-run       force preview, overrides --apply and DEHOARD_APPLY_DEFAULT
   --yes / -y      auto-confirm every prompt (combine with --apply; use with care)
+  --pick          interactive multiselect of --scan candidates via fzf (implies --scan; needs fzf
+                  installed and --apply; falls back to per-item prompts if fzf is absent)
   --report        read-only audit; never deletes
   --json          machine-readable model inventory (implies --report; pure JSON on stdout)
                   e.g. dehoard --json | jq '.cross_tool_duplicates'
@@ -537,10 +539,12 @@ ASSUME_YES=false
 REPORT=false
 APPLY=false
 JSON=false
+PICK=false
 for arg in "$@"; do
   [[ "$arg" == "--deep" ]]             && DEEP=true
   [[ "$arg" == "--models" ]]           && MODELS=true
   [[ "$arg" == "--scan" ]]             && SCAN=true
+  [[ "$arg" == "--pick" ]]             && { PICK=true; SCAN=true; }   # interactive multiselect (implies --scan)
   [[ "$arg" == "--dry-run" ]]          && DRY_RUN=true
   [[ "$arg" == "--apply" ]]            && APPLY=true
   [[ "$arg" == "--yes" || "$arg" == "-y" ]] && ASSUME_YES=true
@@ -619,7 +623,7 @@ c_bold()   { _c '1'    "$@"; }   # bold     , emphasis / prompts
 c_step()   { if $DRY_RUN; then c_dim "$@"; else c_bold "$@"; fi }
 
 # Warn about unrecognised flags, catches typos like --scann silently running Tier 1 only
-_VALID_FLAGS=(--deep --models --scan --dry-run --apply --yes -y --report --json --help -h --version -V --reset-ignore --list-ignored --unignore)
+_VALID_FLAGS=(--deep --models --scan --pick --dry-run --apply --yes -y --report --json --help -h --version -V --reset-ignore --list-ignored --unignore)
 for arg in "$@"; do
   # Only warn about --flag tokens; bare paths (e.g. argument to --unignore) are not flags
   [[ "$arg" == --* || "$arg" == -[a-z] ]] || continue
@@ -813,6 +817,53 @@ _pm_run() {
   local rc; _run_timeout "$DEHOARD_PM_TIMEOUT" "$@" 2>/dev/null; rc=$?
   (( rc == 124 )) && echo "  $(c_warn "skipped ${label}: timed out after ${DEHOARD_PM_TIMEOUT}s (run it manually if needed)")"
   return 0
+}
+
+# Interactive multiselect support (optional, via fzf). Used only by --pick. fzf is NOT a hard
+# dependency: when it is absent we fall back to the per-item prompts. DEHOARD_FORCE_PICKER=1 lifts
+# the TTY requirement for the hermetic test suite only (real use needs a terminal).
+_have_picker() {
+  command -v fzf &>/dev/null || return 1
+  [[ -n "${DEHOARD_FORCE_PICKER:-}" ]] && return 0
+  [[ -t 0 && -t 1 ]]
+}
+
+# Multiselect picker. $1 = header line. Reads candidate records on stdin, NUL-delimited, each as
+# "display-label<TAB>absolute-path". Writes the SELECTED absolute paths to stdout, NUL-delimited.
+# Safety contract: on cancel (Esc/Ctrl-C) or no selection, fzf emits nothing, so this emits nothing
+# and the caller deletes NOTHING. An empty selection is never treated as "select all".
+_pick() {
+  fzf --multi --read0 --print0 --delimiter=$'\t' --with-nth=1 \
+      --prompt='delete> ' --header="$1" 2>/dev/null \
+  | while IFS= read -r -d '' _rec; do
+      printf '%s\0' "${_rec#*$'\t'}"      # strip the label, keep the path after the first TAB
+    done
+}
+
+# Run one --pick section. Args after $1/$2 are candidate records, each "display-label<TAB>abs-path".
+# Shows them in the picker (you TAB the ones to delete, leave the rest), then PRINTS the chosen set
+# back for a final look, asks once, and deletes via _rm (which previews under --dry-run, re-checks
+# the safe-root guard, and honors the ignore list). Cancel / empty selection keeps everything.
+# $1 = section noun (for the prompts), $2 = recreate hint to print after deletion ("" for none).
+_pick_section() {
+  local _noun="$1" _hint="$2"; shift 2
+  (( $# )) || { echo "$(c_dim "  None found.")"; return 0; }
+  local -a _sel=(); local _p _tot=0
+  while IFS= read -r -d '' _p; do [[ -n "$_p" ]] && _sel+=("$_p"); done < <(
+    printf '%s\0' "$@" | _pick "$_noun: TAB to mark for deletion, Enter to confirm, Esc keeps all"
+  )
+  if (( ${#_sel[@]} == 0 )); then echo "  Nothing selected, keeping all ${_noun}."; return 0; fi
+  echo "$(c_head "  Selected for deletion:")"
+  for _p in "${_sel[@]}"; do
+    printf "    %8s  %s\n" "$(du -sh "$_p" 2>/dev/null | cut -f1)" "${_p/#$HOME/~}"
+    _tot=$(( _tot + $(du -sk "$_p" 2>/dev/null | cut -f1) ))
+  done
+  if _ask "  Delete these ${#_sel[@]} ${_noun} (~$(( _tot / 1024 )) MB)?"; then
+    for _p in "${_sel[@]}"; do _rm "$_p"; done
+    [[ -n "$_hint" ]] && { $DRY_RUN || echo "  $_hint"; }
+  else
+    echo "  Cancelled, kept all ${_noun}."
+  fi
 }
 
 # Graceful exit on Ctrl+C or SIGTERM: report freed space so far.
@@ -1572,6 +1623,17 @@ if $SCAN; then
   )"})
   VENV_TOTAL_KB=0
   FOUND_VENV=false
+  if $PICK && _have_picker && (( ${#VENV_CFGS[@]} )); then
+    # --pick: choose venvs in one fzf multiselect (preview-safe; _rm previews under --dry-run).
+    FOUND_VENV=true
+    local -a _vrecs=(); local _d _kb
+    for cfg in $VENV_CFGS; do
+      _d="${cfg:h}"; [[ -d "$_d" ]] || continue
+      _kb=$(du -sk "$_d" 2>/dev/null | cut -f1)
+      _vrecs+=( "$(printf '%6dM  %s  %s\t%s' "$(( _kb / 1024 ))" "$(stat -f '%Sm' -t '%Y-%m-%d' "$_d" 2>/dev/null)" "${_d/#$HOME/~}" "$_d")" )
+    done
+    _pick_section "venv(s)" "Recreate any venv: python -m venv <dir> / uv sync / poetry install." "${_vrecs[@]}"
+  else
   for cfg in $VENV_CFGS; do
     d="${cfg:h}"                 # venv dir = parent of pyvenv.cfg
     [[ -d "$d" ]] || continue
@@ -1595,6 +1657,7 @@ if $SCAN; then
       VENV_TOTAL_KB=$(( VENV_TOTAL_KB + size_kb ))
     fi
   done
+  fi
   $FOUND_VENV || echo "  None found."
   (( VENV_TOTAL_KB > 0 )) && ! $DRY_RUN && echo "  Freed from venvs: $(( VENV_TOTAL_KB / 1024 )) MB"
 
@@ -1742,6 +1805,16 @@ if $SCAN; then
   )"})
   NM_TOTAL_KB=0
   FOUND_NM=false
+  if $PICK && _have_picker && (( ${#NM_DIRS[@]} )); then
+    FOUND_NM=true
+    local -a _nmrecs=(); local _d _kb
+    for _d in $NM_DIRS; do
+      [[ -d "$_d" ]] || continue
+      _kb=$(du -sk "$_d" 2>/dev/null | cut -f1)
+      _nmrecs+=( "$(printf '%6dM  %s  %s\t%s' "$(( _kb / 1024 ))" "$(stat -f '%Sm' -t '%Y-%m-%d' "$_d" 2>/dev/null)" "${_d/#$HOME/~}" "$_d")" )
+    done
+    _pick_section "node_modules" "Recreate: npm install (or yarn / pnpm install)." "${_nmrecs[@]}"
+  else
   for d in $NM_DIRS; do
     FOUND_NM=true
     size_kb=$(du -sk "$d" 2>/dev/null | cut -f1)
@@ -1754,6 +1827,7 @@ if $SCAN; then
       NM_TOTAL_KB=$(( NM_TOTAL_KB + size_kb ))
     fi
   done
+  fi
   $FOUND_NM || echo "  None found."
   (( NM_TOTAL_KB > 0 )) && ! $DRY_RUN && echo "  Freed from node_modules: $(( NM_TOTAL_KB / 1024 )) MB"
 
@@ -2042,6 +2116,13 @@ if $SCAN; then
   )"})
   if (( ${#SWAP_FILES[@]} == 0 )); then
     echo "$(c_dim "  None found.")"
+  elif $PICK && _have_picker; then
+    echo "  NOTE: *.swp files mean Vim had unsaved changes, review if Vim is open."
+    local -a _bkrecs=(); local _f
+    for _f in $SWAP_FILES; do
+      _bkrecs+=( "$(printf '%-8s  %s\t%s' "$(du -sh "$_f" 2>/dev/null | cut -f1)" "${_f/#$HOME/~}" "$_f")" )
+    done
+    _pick_section "backup/swap file(s)" "" "${_bkrecs[@]}"
   else
     for f in $SWAP_FILES; do
       printf "  %-8s %s\n" "$(du -sh "$f" 2>/dev/null | cut -f1)" "${f/#$HOME/~}"
@@ -2066,6 +2147,14 @@ if $SCAN; then
   )"})
   FOUND_LOG=false
   LOG_TOTAL_KB=0
+  if $PICK && _have_picker && (( ${#LOG_FILES[@]} )); then
+    FOUND_LOG=true
+    local -a _lgrecs=(); local _f
+    for _f in $LOG_FILES; do
+      _lgrecs+=( "$(printf '%-8s  %s\t%s' "$(du -sh "$_f" 2>/dev/null | cut -f1)" "${_f/#$HOME/~}" "$_f")" )
+    done
+    _pick_section "log file(s)" "" "${_lgrecs[@]}"
+  else
   for f in $LOG_FILES; do
     FOUND_LOG=true
     size_kb=$(du -sk "$f" 2>/dev/null | cut -f1)
@@ -2075,6 +2164,7 @@ if $SCAN; then
       LOG_TOTAL_KB=$(( LOG_TOTAL_KB + size_kb ))
     fi
   done
+  fi
   $FOUND_LOG || echo "  None found."
   (( LOG_TOTAL_KB > 0 )) && ! $DRY_RUN && echo "  Freed from logs: $(( LOG_TOTAL_KB / 1024 )) MB"
 
