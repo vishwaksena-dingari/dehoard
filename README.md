@@ -161,9 +161,10 @@ Duplicate detection is report-only. Matching is by normalized name, so a `Q4` is
 
 ## `--json` for scripting
 
-`dehoard --json` prints a JSON manifest of every local model plus the duplicate analysis. It's
-read-only, deletes nothing, and writes only JSON to stdout (progress text is suppressed), so it pipes
-into `jq`:
+`dehoard --json` prints a JSON inventory of the cross-tool models it tracks (HuggingFace, Ollama,
+LM Studio, PyTorch hub) plus the duplicate analysis. (Framework caches like Keras or Whisper appear
+as a size footprint in `--report`, not as individual `models[]` entries.) It's read-only, deletes
+nothing, and writes only JSON to stdout (progress text is suppressed), so it pipes into `jq`:
 
 ```sh
 dehoard --json | jq '.total_reclaim_bytes'              # reclaimable bytes from true duplicates
@@ -206,6 +207,7 @@ Set via environment variables, for example in `~/.zshrc`:
 | `DEHOARD_APPLY_DEFAULT` | `false` | `true` makes `--apply` the default (`--dry-run` still forces preview). |
 | `DEHOARD_IGNORE_ENABLED` | `true` | `false` disables the ignore list entirely (no "Always skip?" prompts; the file is never written or read). |
 | `CACHE_MIN_MB` | `100` | Minimum size in MB for a cache dir to appear in the generic sweep. |
+| `DEHOARD_PM_TIMEOUT` | `120` | Seconds before a single external package-manager cleanup (brew/npm/yarn/trunk/…) is timed out and skipped, so one hung tool can't freeze the run. |
 | `NO_COLOR` | unset | Set to any value to disable terminal color ([no-color.org](https://no-color.org)). Color is also off when stdout isn't a TTY (e.g. piped), and never appears in `--json` or the deletion log. |
 | `CLICOLOR_FORCE` | unset | Set to `1` to force color even when stdout isn't a TTY. `--json` stays pure JSON regardless. |
 

@@ -15,6 +15,10 @@ GIT_GC_ROOTS=(~/Documents ~/src ~/Desktop ~/Developer "${EXTRA_SCAN_DIRS[@]}")
 # Generic cache sweep (report + --scan): ignore cache dirs smaller than this many MB.
 # Env-overridable, e.g.  CACHE_MIN_MB=250 dehoard --scan
 : ${CACHE_MIN_MB:=100}
+# Wall-clock timeout (seconds) for each external package-manager cleanup (brew/npm/yarn/
+# trunk/...). Guards against a single tool hanging the whole run. Env-overridable:
+#   DEHOARD_PM_TIMEOUT=300 dehoard --apply
+: ${DEHOARD_PM_TIMEOUT:=120}
 # Set to 'true' to make --apply the default so you don't have to type it every run.
 # Add  export DEHOARD_APPLY_DEFAULT=true  to your ~/.zshrc to make it permanent.
 # Override back to safe preview for a single run:  DEHOARD_APPLY_DEFAULT=false dehoard
@@ -661,6 +665,12 @@ fi
 TMPDIR="${TMPDIR:-/tmp}"      # default if unset (CI/cron/restored sessions), _rm whitelist still guards
 TMPDIR="${TMPDIR%/}/"         # normalize: ensure exactly one trailing slash
 BASE="$(dirname "$TMPDIR")"   # parent of T/ → gives C/ and X/ siblings
+# Load the ignore list ONCE so _rm honors it in every tier (not just interactive prompts).
+# Non-empty lines only; entries are absolute paths and may contain globs.
+_IGNORE_PATTERNS=()
+if ${DEHOARD_IGNORE_ENABLED:-true} && [[ -f "${HOME}/.cache/dehoard/ignore" ]]; then
+  _IGNORE_PATTERNS=(${(f)"$(grep -v '^[[:space:]]*$' "${HOME}/.cache/dehoard/ignore" 2>/dev/null)"})
+fi
 
 # ── Shared helpers ──────────────────────────────────────
 # Prompts y/N only when stdin is a terminal; defaults to N otherwise.
@@ -702,6 +712,18 @@ _ask() {  # $1=question, $2=optional path for always-skip check
   fi
 }
 
+# Honored by _rm in EVERY tier, not just the interactive _ask prompts, so a path you mark
+# "always skip" is respected even by the batch Tier 1 / --deep sweeps. The `_IGNORE_PATTERNS` array
+# is populated once in the preamble (do NOT reset it here, that would run after the load and wipe it).
+# Entries are absolute paths and may contain globs.
+_is_ignored() {  # $1 = absolute path (trailing slash stripped); true if it matches any ignore entry
+  local _p
+  for _p in "$_IGNORE_PATTERNS[@]"; do
+    [[ "$1" == ${~_p} ]] && return 0     # ${~_p} activates glob metacharacters in the pattern
+  done
+  return 1
+}
+
 # Deletes paths, or prints what would be deleted in --dry-run/preview mode.
 # Guards against catastrophic targets: empty/unset vars, "/", and "$HOME" itself.
 _rm() {
@@ -714,6 +736,7 @@ _rm() {
     return 1
   fi
   local target
+  local -a _todo=()
   for target in "$@"; do
     # Hard stops: empty/unset, root, or $HOME itself.
     if [[ -z "$target" || "$target" == "/" || "$target" == "$HOME" || "$target" == "$HOME/" ]]; then
@@ -728,21 +751,68 @@ _rm() {
       *) echo "$(c_warn "  ⚠️  refusing path outside safe roots (\$HOME, var/folders, tmp): '$target'")" >&2
          return 1 ;;
     esac
+    # Ignore list: skip + announce (never abort), honored in every tier. Subtractive by design
+    # (only ever deletes LESS), so it cannot widen what gets removed. Checked AFTER the safe-root
+    # guard so an ignore entry can never relax the whitelist.
+    if (( ${#_IGNORE_PATTERNS[@]} )) && _is_ignored "${target%/}"; then
+      echo "$(c_dim "  ⊘ ignored: ${target/#$HOME/~}")"
+      continue
+    fi
+    _todo+=("$target")
   done
+  (( ${#_todo[@]} )) || return 0
   if $DRY_RUN; then
-    for target in "$@"; do
+    for target in "$_todo[@]"; do
       [[ -e "$target" ]] && echo "  [preview] would delete: $target ($(du -sh "$target" 2>/dev/null | cut -f1))"
     done
   else
     local _sz=""
-    for target in "$@"; do
+    for target in "$_todo[@]"; do
       [[ -e "$target" ]] || continue
       _sz=$(du -sh "$target" 2>/dev/null | cut -f1)
-      echo "  removed: ${target/#$HOME/~} (${_sz})"                    # human-visible: what was deleted, live
-      [[ -n "$LOGFILE" ]] && printf '%s\t%s\n' "$_sz" "$target" >> "$LOGFILE"   # raw record (never colored)
+      # Delete FIRST, report only on success: never print "removed:" for something that did not
+      # actually go. rm's own errors are routed to the deletion log, not the terminal, so a
+      # permission-denied tree (e.g. root-owned CPAN build dirs) can't flood the screen.
+      if rm -rf "$target" 2>>"${LOGFILE:-/dev/null}"; then
+        echo "  removed: ${target/#$HOME/~} (${_sz})"                  # human-visible: what was actually deleted
+        [[ -n "$LOGFILE" ]] && printf '%s\t%s\n' "$_sz" "$target" >> "$LOGFILE"   # raw record (never colored)
+      else
+        echo "$(c_warn "  ⚠️  could not remove ${target/#$HOME/~} (permission denied; if root-owned, try: sudo rm -rf '${target/#$HOME/~}')")" >&2
+      fi
     done
-    rm -rf "$@"
   fi
+}
+
+# Run an external command with a wall-clock timeout, so a hung tool (e.g. a package
+# manager waiting on a daemon or the network) cannot freeze the whole run. macOS has no
+# `timeout`; prefer it / gtimeout when installed, else poll a backgrounded child. Returns
+# the command's own exit code, or 124 if it was killed for exceeding $1 seconds.
+_run_timeout() {
+  local secs="$1"; shift
+  (( $# )) || return 0
+  local t
+  for t in timeout gtimeout; do
+    command -v "$t" &>/dev/null && { "$t" "$secs" "$@"; return $?; }
+  done
+  "$@" &                       # script runs non-interactively, so no job-control noise
+  local pid=$! ticks=0 maxticks=$(( secs * 5 ))   # poll 5x/sec so fast tools return at once
+  while (( ticks < maxticks )); do
+    kill -0 "$pid" 2>/dev/null || { wait "$pid" 2>/dev/null; return $?; }
+    sleep 0.2; (( ticks++ ))
+  done
+  kill -TERM "$pid" 2>/dev/null; sleep 1; kill -KILL "$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null
+  return 124
+}
+
+# Gate a package-manager cleanup on the tool being installed, then run it under the
+# timeout guard. $1 = human label; the rest is the command (gated on its first word).
+_pm_run() {
+  local label="$1"; shift
+  command -v "$1" &>/dev/null || return 0
+  local rc; _run_timeout "$DEHOARD_PM_TIMEOUT" "$@" 2>/dev/null; rc=$?
+  (( rc == 124 )) && echo "  $(c_warn "skipped ${label}: timed out after ${DEHOARD_PM_TIMEOUT}s (run it manually if needed)")"
+  return 0
 }
 
 # Graceful exit on Ctrl+C or SIGTERM: report freed space so far.
@@ -1088,17 +1158,18 @@ if $DRY_RUN; then
   command -v yarn &>/dev/null && echo "  [dry-run] would run: yarn cache clean"
   echo "  [dry-run] would run: pip cache purge (pip3.7-3.25), uv cache clean, bun pm cache rm"
 else
-  command -v brew &>/dev/null && brew cleanup -s --prune=all 2>/dev/null   # -s also scrubs the download cache (~/Library/Caches/Homebrew)
-  command -v brew &>/dev/null && brew autoremove 2>/dev/null
-  command -v npm  &>/dev/null && npm cache clean --force 2>/dev/null
-  command -v pnpm &>/dev/null && pnpm store prune 2>/dev/null
-  command -v yarn &>/dev/null && yarn cache clean 2>/dev/null
+  # Each external tool runs under a timeout so one hung command can't freeze the run.
+  _pm_run "brew cleanup"   brew cleanup -s --prune=all   # -s also scrubs the download cache (~/Library/Caches/Homebrew)
+  _pm_run "brew autoremove" brew autoremove
+  _pm_run "npm cache"      npm cache clean --force
+  _pm_run "pnpm store"     pnpm store prune
+  _pm_run "yarn cache"     yarn cache clean
   for pip_cmd in pip pip3 $(seq 7 25 | xargs -I{} echo pip3.{}); do
-    command -v "$pip_cmd" &>/dev/null && "$pip_cmd" cache purge 2>/dev/null
+    _pm_run "$pip_cmd cache" "$pip_cmd" cache purge
   done
-  command -v uv    &>/dev/null && uv cache clean    2>/dev/null
-  command -v bun   &>/dev/null && bun pm cache rm   2>/dev/null
-  command -v trunk &>/dev/null && trunk cache prune 2>/dev/null
+  _pm_run "uv cache"       uv cache clean
+  _pm_run "bun cache"      bun pm cache rm
+  _pm_run "trunk cache"    trunk cache prune
 fi
 
 echo "$(c_step "Clearing node-gyp cache...")"
@@ -1179,7 +1250,9 @@ _rm ~/.Trash/*
 _rm ~/Library/Logs/CrashReporter/MobileDevice/*
 
 echo "$(c_step "Pruning old Time Machine snapshots (keeping latest)...")"
-SNAP_DATES=(${(f)"$(sudo tmutil listlocalsnapshotdates / 2>/dev/null | grep -v '^$' | sort)"})
+# Keep only date-formatted rows (e.g. 2026-05-31-081452); drops the "Snapshot dates for disk /:"
+# header line that `tmutil` prints, which must never be mistaken for a snapshot to delete.
+SNAP_DATES=(${(f)"$(sudo tmutil listlocalsnapshotdates / 2>/dev/null | grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2}' | sort)"})
 if (( ${#SNAP_DATES[@]} > 1 )); then
   for date in ${SNAP_DATES[1,-2]}; do
     if $DRY_RUN; then

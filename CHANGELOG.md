@@ -3,6 +3,32 @@
 All notable changes to `dehoard` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [0.1.1]: 2026-06-02
+
+### Fixed
+- **A hung package manager no longer freezes a run.** Each external package-manager cleanup
+  (brew/npm/pnpm/yarn/pip/uv/bun/trunk) now runs under a wall-clock timeout; if one blocks, dehoard
+  prints `skipped <tool>: timed out` and continues. The timeout is `DEHOARD_PM_TIMEOUT` seconds
+  (default 120, env-overridable). Found by real-machine testing, where a package-manager command
+  blocked indefinitely.
+- **`_rm` no longer claims a deletion it did not make.** It now deletes each path first and prints
+  `removed:` only on success; on failure it prints one concise warning (with a sudo hint for
+  root-owned paths) and routes `rm`'s own errors to the deletion log instead of flooding the terminal
+  (e.g. root-owned CPAN build dirs no longer dump hundreds of lines).
+- **The ignore list is now honored in every tier.** Previously "always skip" only applied at the
+  interactive prompts; batch Tier 1 / `--deep` sweeps bypassed it. The check now lives in the single
+  `_rm` delete primitive (after the safe-root guard, so it can only ever skip more), and entries may
+  be globs.
+- **Time Machine snapshot parsing** now keeps only date-formatted rows, so the
+  `tmutil listlocalsnapshotdates` header line can never be mistaken for a snapshot to delete.
+
+### Documentation
+- Clarified that `--json` `models[]` is the cross-tool inventory it dedups across (HuggingFace,
+  Ollama, LM Studio, PyTorch hub); framework caches like Keras or Whisper appear as a size footprint
+  in `--report`, not as individual `models[]` entries.
+
+All fixes covered by the fixture-`$HOME` test suite (56 assertions).
+
 ## [0.1.0]: 2026-06-01
 
 First public release: a single auditable zsh script that reclaims disk on ML/dev Macs and refuses

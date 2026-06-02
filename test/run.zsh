@@ -453,6 +453,85 @@ else
   bad "docs/RULES.md not found (the safety constitution must ship with the tool)"
 fi
 
+# 5w, a hung package-manager tool must NOT freeze the run: the timeout guard kills it and
+#       continues (real-machine bug #17: a PM command blocked >10 min, no timeout).
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+print -r -- $'#!/bin/sh\nsleep 30' > "$STUBDIR/brew"; chmod +x "$STUBDIR/brew"   # brew now HANGS
+mkdir -p "$FIX/.npm/_npx"; : > "$FIX/.npm/_npx/x"
+( HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_PM_TIMEOUT=2 \
+    zsh "$SCRIPT" --apply --yes >"$FIX/out" 2>&1 ) &
+run_pid=$!
+( sleep 40; kill -9 $run_pid 2>/dev/null ) &     # safety net: a broken guard must not hang CI
+wd_pid=$!
+wait $run_pid 2>/dev/null; run_rc=$?
+kill $wd_pid 2>/dev/null; wait $wd_pid 2>/dev/null
+if (( run_rc == 137 )); then
+  bad "PM timeout guard FAILED: run had to be force-killed (a hung tool still freezes it)"
+elif grep -q "timed out" "$FIX/out"; then
+  ok "hung package-manager tool times out and the run continues (PM guard works)"
+else
+  bad "PM guard: run finished but emitted no 'timed out' notice"
+fi
+rm -rf "$FIX"
+
+# 5x, Time Machine snapshot parse: the `tmutil listlocalsnapshotdates` HEADER line must never be
+#       treated as a snapshot date (real-machine bug: it showed "would delete: Snapshot dates for disk /:").
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+print -r -- $'#!/bin/sh\nexec "$@"' > "$STUBDIR/sudo"; chmod +x "$STUBDIR/sudo"   # sudo runs its args
+cat > "$STUBDIR/tmutil" <<'TMEOF'
+#!/bin/sh
+case "$1" in
+  listlocalsnapshotdates) printf 'Snapshot dates for disk /:\n2026-05-30-010101\n2026-05-31-020202\n' ;;
+esac
+exit 0
+TMEOF
+chmod +x "$STUBDIR/tmutil"
+tmout=$(HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" zsh "$SCRIPT" --dry-run 2>&1)
+if echo "$tmout" | grep -q "delete snapshot:.*Snapshot dates for disk"; then
+  bad "TM snapshot: header line mis-parsed as a snapshot date"
+elif echo "$tmout" | grep -q "would delete snapshot: 2026-05-30-010101"; then
+  ok "TM snapshot parse: header dropped, real date kept, latest preserved"
+else
+  bad "TM snapshot parse: expected a real date in the would-delete output"
+fi
+rm -rf "$FIX"
+
+# 5y, _rm honesty: on a delete that FAILS (unremovable dir), do NOT print "removed:", warn ONCE,
+#       keep rm's error flood off the terminal (routed to the log), and still delete good siblings.
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+mkdir -p "$FIX/Library/Caches/node-gyp/sub"; : > "$FIX/Library/Caches/node-gyp/sub/f"
+chmod 000 "$FIX/Library/Caches/node-gyp"          # rm -rf can't recurse → fails (approximates root-owned)
+mkdir -p "$FIX/.cache/node"; : > "$FIX/.cache/node/x"   # a deletable sibling cache
+ho=$(HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" zsh "$SCRIPT" --apply --yes 2>&1)
+chmod -R u+rwx "$FIX/Library/Caches/node-gyp" 2>/dev/null   # restore so cleanup can remove it
+if echo "$ho" | grep -q "removed:.*node-gyp"; then
+  bad "_rm claimed 'removed:' for a path rm failed on (the lie is back)"
+elif ! echo "$ho" | grep -q "could not remove.*node-gyp"; then
+  bad "_rm did not warn on a failed delete"
+elif echo "$ho" | grep -q "rm: "; then
+  bad "_rm let rm's error flood hit the terminal (should route to the log)"
+elif ! echo "$ho" | grep -q "removed:.*\.cache/node"; then
+  bad "_rm did not delete/echo a removable sibling after a failure"
+else
+  ok "_rm: failed delete warns once, no flood, no false 'removed:', good deletes still echo"
+fi
+rm -rf "$FIX"
+
+# 5z, universal ignore list: a path matching an ignore entry (incl. a glob) must survive even in the
+#       batch Tier-1 sweep (not just interactive prompts), and the skip is announced.
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+mkdir -p "$FIX/.cache/dehoard"
+print -r -- "$FIX/Library/Caches/node-*" > "$FIX/.cache/dehoard/ignore"   # a GLOB ignore entry
+mkdir -p "$FIX/Library/Caches/node-gyp"; : > "$FIX/Library/Caches/node-gyp/f"   # ignored → must survive
+mkdir -p "$FIX/.cache/node"; : > "$FIX/.cache/node/x"                            # not ignored → deleted
+io=$(HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" zsh "$SCRIPT" --apply --yes 2>&1)
+if [[ -d "$FIX/Library/Caches/node-gyp" ]] && [[ ! -d "$FIX/.cache/node" ]] && echo "$io" | grep -q "ignored:.*node-gyp"; then
+  ok "ignore list honored by _rm in batch Tier 1: globbed path survives + announced, others deleted"
+else
+  bad "ignore list NOT honored by _rm/batch tiers (globbed node-gyp should survive + be announced)"
+fi
+rm -rf "$FIX"
+
 # 6, syntax
 zsh -n "$SCRIPT" && ok "zsh -n syntax clean" || bad "syntax error"
 

@@ -109,7 +109,9 @@ sizes are integers (`size_bytes`), and unknown values are explicit `null`.
 
 Field notes:
 
-- **`models[]`** is the honest physical inventory, one object per model copy actually on disk.
+- **`models[]`** lists one object per model copy for the cross-tool tools dehoard parses into a
+  family/quant/variant key (HuggingFace, Ollama, LM Studio, PyTorch hub). Framework caches shown in
+  `--report`'s size footprint (Keras, Whisper, llama.cpp, GPT4All) are not enumerated here.
 - **`cross_tool_duplicates[]`** are the true duplicates; `reclaim_bytes` is the safe-to-reclaim
   amount for that group (total minus the largest copy). `total_reclaim_bytes` sums them.
 - **`related_variants[]`** are same-family-size groups with a real quant/variant difference, listed,
