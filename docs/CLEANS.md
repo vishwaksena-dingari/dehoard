@@ -5,11 +5,11 @@
 > what's actually on *your* machine. This page is a human-readable map organized by mode; the tool
 > itself is authoritative, so when in doubt, trust `--help`.
 
-Everything below is **regenerable**, caches, build outputs, and re-downloadable assets. dehoard
+Everything below is **regenerable**: caches, build outputs, and re-downloadable assets. dehoard
 detects and **keeps** your real data (model weights, generated outputs, chat/session history, source,
 git, configs). Nothing here is deleted without `--apply`.
 
-## Tier 1: always-safe (runs every time, batch-cleaned)
+## Tier 1: always-safe (runs every time, batch-cleaned; skipped under `--pick`)
 
 Zero-consequence, regenerable junk:
 
@@ -44,7 +44,8 @@ Zero-consequence, regenerable junk:
 
 ## `--models`: interactive LLM/ML weight cleanup
 
-Per-item prompts (weights are user data, never batch-deleted):
+Per-tool prompts: each tool lists its models with sizes, then asks once before clearing that tool's
+set (weights are user data, never auto-deleted or swept by Tier 1 / `--scan`):
 
 - **Ollama** models (via `ollama rm`), **LM Studio** `.gguf` files, **HuggingFace** cache,
   **NLTK** corpora, **PyTorch** hub cache.
@@ -56,7 +57,8 @@ identifies which copies are redundant before you decide.
 
 Per-entry prompts for environments; batch prompts for clearly-safe artifacts:
 
-- **Python environments**: venvs (detected by `pyvenv.cfg`, any folder name), conda envs, uv pythons.
+- **Python environments**: venvs (detected by `pyvenv.cfg`, any folder name), conda envs.
+- **uv Python installations**: whole interpreters under `${UV_PYTHON_INSTALL_DIR:-~/.local/share/uv/python}`, removed via `uv python uninstall` (distinct from venvs above).
 - **Build caches & artifacts**: `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`,
   `*.egg-info`, stray `.pyc`; Rust `target/` (validated by sibling `Cargo.toml`); `dist/`/`build/`/
   CMake build dirs; test/coverage artifacts (`.coverage`, `htmlcov/`, `.tox/`, `.nox/`).
@@ -90,3 +92,19 @@ Per-entry prompts for environments; batch prompts for clearly-safe artifacts:
 > ⚠️ A few `--scan` items can hold things you care about (e.g. `.RData`, IPython history, a `dist/`
 > some projects commit). dehoard lists them before asking and flags them with a warning, review the
 > list before confirming.
+
+### `--scan --pick`: one picker per category
+
+With `--pick` (plus `--apply` and `fzf` installed), the per-entry and batch prompts above are
+replaced by an `fzf` picker **per category**, opened one at a time, **biggest category first**. A
+per-category summary (count + size) prints first as a contents page. In each category's picker: TAB
+marks items, Ctrl-A all / Ctrl-D none, Enter confirms, and **Esc skips that whole category**; the
+preview pane shows the recreate hint and any caveat (so the `.RData` / `dist/` warning above travels
+with the item). After you mark a category, dehoard reprints the marked set and asks once, then deletes
+just that category before moving to the next, so each category is a self-contained unit (Ctrl-C after
+the big ones keeps what you already cleared). It is interactive-only, so it does **not** run the Tier 1
+sweep; an empty selection or Esc deletes nothing; environment managers (conda/uv/Android/Rust) are
+removed via their native uninstaller. Tiny-file noise (`.DS_Store`, stray `.pyc`, LaTeX aux, IPython
+history) and model weights are not picker categories, so under `--pick` they are **skipped** (a note
+points you to plain `--scan` to clean them) rather than deleted inline behind the picker. Without
+`fzf`, `--pick` falls back to the per-item prompts described above.

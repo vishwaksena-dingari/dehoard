@@ -44,14 +44,22 @@ history, and configuration files. Anything non-regenerable is reported, not dele
 2. **Preview by default.** A plain run prints what it would delete and removes nothing. Deletion
    happens only under `--apply`. `--dry-run` forces preview even when `--apply` is also passed.
 3. **Never auto-delete user data.** Model weights and session data are reported, never removed
-   without an explicit, per-item choice.
+   without an explicit `--models` choice (per tool, confirmed).
 4. **Refuse to run as root.** The tool exits rather than touch system-owned files.
-5. **Everything deletes through `_rm`.** There is one delete primitive. No code path calls `rm`
-   directly, and no new delete primitive is added.
+5. **`_rm` is the central delete primitive.** The overwhelming majority of deletions flow through it.
+   A few audited, `--apply`-gated exceptions exist: `--deep`'s root-owned system-cache sweep uses
+   `sudo rm` (it can't run through the user-space guard); `--models` uses `ollama rm` and a LM Studio
+   `find -delete`; interactive `--scan` (both the per-entry prompts and `--pick`) delegates env-managers
+   (conda/uv/Android/Rust) to their native uninstaller, falling back to `_rm`; plus a trivial `rmdir` of
+   emptied parent dirs and removal of dehoard's own ignore file. New code must not add more.
 
 ## The `_rm` contract
 
-`_rm` is the only function that deletes. It enforces:
+`_rm` is the central primitive for path deletion: nearly every path dehoard removes flows through it.
+The audited exceptions delete outside it (all `--apply`-gated): `--deep`'s `sudo rm` system-cache
+sweep, `--models`' `ollama rm` and LM Studio `find -delete`, interactive `--scan`'s native env-manager
+uninstallers (per-entry prompts and `--pick` alike, with an `_rm` fallback), and trivial
+`rmdir`/own-ignore-file cleanup. For everything that does flow through it, `_rm` enforces: 
 
 - **Fail-closed.** If the dry-run safety flag is unset, `_rm` refuses and deletes nothing, rather
   than risk deleting in what the user believes is preview.
@@ -69,6 +77,13 @@ history, and configuration files. Anything non-regenerable is reported, not dele
 
 Under `--apply`, `_rm` echoes each removed path and its size as it goes, and appends the same record
 to a deletion log under `~/.cache/dehoard/`.
+
+The `--scan --pick` picker removes environment managers (conda/uv/Android/Rust) through their native
+uninstaller so they leave no stale metadata; if that uninstaller is absent or fails it falls back to
+`_rm`. The ignore list is enforced at registration: an ignored path is dropped before it is ever
+listed in the picker, so it cannot be selected or deleted regardless of type. Plain-path deletions
+(and the `|| _rm` fallbacks) still pass `_rm`'s safe-root whitelist; native uninstallers self-scope
+to the tool's own files.
 
 ## The `_ai_clean` pattern
 
@@ -91,10 +106,17 @@ This keeps the clean set and the keep set explicit and side by side for every to
 - **Tier 1** (bare run, or `--apply`): always-safe regenerable caches, cleaned as a batch behind the
   preview/apply gate.
 - **`--deep`**: Tier 2, more aggressive caches with a real but minor rebuild or re-download cost.
-- **`--models`**: interactive, per-item cleanup of LLM/ML weights. Weights are user data, so they
-  are never batch-deleted.
+- **`--models`**: interactive, **per-tool** cleanup of LLM/ML weights, it lists each tool's models
+  with sizes, then asks once before clearing that tool's set (e.g. "Delete all Ollama models?").
+  Weights are treated differently from caches because they are *not cheaply regenerable*: a wrong
+  deletion costs a slow (sometimes gated or authenticated) multi-GB re-download, and a fine-tuned or
+  private weight may be irreplaceable. So weights are never swept by Tier 1 / `--deep` / `--scan`,
+  never offered in the `--pick` picker, and removed only through this explicit, opt-in confirmation.
 - **`--scan`**: interactive crawl of project artifacts (virtual environments, `node_modules`, build
-  directories, editor leftovers, orphaned tool data).
+  directories, editor leftovers, orphaned tool data). With `--pick` (plus `fzf` + `--apply`) the
+  crawl opens one `fzf` picker per category (biggest first) and is interactive-only: it does not run
+  the Tier 1/Tier 2 batch sweeps, and an empty or aborted selection (Esc) skips that category and
+  deletes nothing.
 - **`--report` / `--json`**: read-only audit and machine-readable inventory. They delete nothing.
 
 ## Rules any future cleanup generation must obey (not yet enforced)
@@ -105,8 +127,9 @@ by an assisted tool, stays inside the safety envelope above.
 
 - A proposed cleanup is **data, not code**: a label, a set of clean-globs, and a set of keep-globs,
   in the `_ai_clean` shape. It is not freeform shell, and it never introduces a new delete call.
-- Every deletion still routes through `_rm` and inherits the safe-root whitelist. A proposal cannot
-  widen that whitelist.
+- Every **newly proposed** cleanup deletes through `_rm` and inherits the safe-root whitelist. A
+  proposal cannot widen that whitelist or introduce its own delete call (the few existing non-`_rm`
+  deleters listed in the `_rm` contract are grandfathered and audited; no new ones are added).
 - Output is **preview-first** and merged by a human. The proposing tool does not execute deletions.
 - A proposal is **refused** when it would: target non-regenerable user data; reach a path outside
   the safe roots; require a raw `rm` or any delete outside `_rm`; or require a hardcoded personal

@@ -30,7 +30,8 @@ dehoard runs `rm`, so here is what it guarantees before you run anything.
   first: run it, read it, then `--apply`.
 - It never touches your data. Model weights, model outputs, chat and session history, source code, git
   history, and configs are detected and kept. Only regenerable caches and artifacts get removed.
-- Every deletion is logged to `~/.cache/dehoard/run-<timestamp>.log` when you `--apply`.
+- Every path dehoard removes through `_rm` is logged to `~/.cache/dehoard/run-<timestamp>.log` when
+  you `--apply`.
 - Provided "as is", without warranty ([MIT](LICENSE)). The safeguards are real, but you run it on your
   own machine and you are responsible for what you delete. Preview first.
 
@@ -49,7 +50,7 @@ flowchart TD
     B -- yes --> X[refuse and exit]
     B -- no --> C{"--report / --json ?"}
     C -- yes --> R[read-only audit<br/>nothing is deleted] --> Z([exit])
-    C -- no --> D["run selected tiers<br/>(Tier 1 always · --deep · --models · --scan)"]
+    C -- no --> D["run selected tiers<br/>(Tier 1 default · --deep · --models · --scan;<br/>--pick = scan picker only)"]
     D --> E[for each cleanup candidate]
     E --> F{in ignore list?}
     F -- yes --> G["⊘ skip and announce"]
@@ -64,9 +65,17 @@ flowchart TD
     L -- yes --> M[delete + log]
 ```
 
-Every candidate goes through the same gates: the ignore list, the preview/apply gate, an optional
-confirmation, and the safe-root guard inside the delete primitive. The read-only modes (`--report`,
-`--json`) branch off early and never reach a delete.
+Nearly every candidate goes through the same gates: the ignore list, the preview/apply gate, an
+optional confirmation, and the safe-root guard inside the delete primitive (`_rm`). A few audited
+deletions run outside `_rm`, all still `--apply`-gated: `--deep`'s root-owned system-cache sweep
+(`sudo rm`) and `--models`' LM Studio cleanup (`find -delete`); see [docs/SAFETY.md](docs/SAFETY.md).
+The read-only modes (`--report`, `--json`) branch off early and never reach a delete.
+
+`--scan --pick` adds an interactive selection layer on top of these gates rather than replacing them:
+it opens one `fzf` picker per category (biggest first; interactive-only, so it skips the Tier 1
+sweep), and for each category reprints what you marked and asks once. It still needs `--apply`, an
+empty selection or Esc skips that category (deletes nothing), and every path dehoard removes directly
+still passes the safe-root guard; environment managers (conda/uv/Android/Rust) use their own uninstaller.
 
 ---
 
@@ -103,6 +112,7 @@ Requires macOS and zsh (the default shell since Catalina).
 | `dehoard --deep` | Add Tier 2: aggressive caches (Library caches, Xcode DerivedData, Docker prune, git gc). Pair with `--apply`. Like Tier 1 it runs as a batch with no per-item prompt (just the preview/apply gate), so preview it first. |
 | `dehoard --models` | Interactive cleanup of LLM/ML weights (HuggingFace, PyTorch, Ollama, LM Studio, NLTK). |
 | `dehoard --scan` | Interactive scan of project artifacts (venvs, `node_modules`, build dirs, editor leftovers, orphaned tools). |
+| `dehoard --scan --pick --apply` | Same scan, but instead of prompting per item it opens **one `fzf` picker per category, biggest first** (a per-category summary of counts + sizes prints first as a contents page). In each category: TAB to mark, **Ctrl-A** all, **Ctrl-D** none, Enter to confirm, **Esc skips that category**; the preview shows last-modified, the recreate command, and any caveat. Interactive-only (skips the Tier 1 sweep); needs `fzf` and `--apply`; falls back to per-item prompts without `fzf`. |
 | `dehoard --json` | Machine-readable model inventory and duplicates as pure JSON on stdout. |
 | `dehoard --dry-run` | Force preview even with `--apply` (the safe default, made explicit). |
 | `dehoard --yes` / `-y` | Auto-confirm prompts. Combine with `--apply`; use with care. |
@@ -151,7 +161,7 @@ flowchart TD
     N["normalize each model<br/>family+size key · quant · variant"] --> Grp[group by family+size]
     Grp --> Cnf{"≥2 known quants<br/>OR ≥2 variants?"}
     Cnf -- yes --> Rel["RELATED variants<br/>different build · NOT counted"]
-    Cnf -- no --> Tru["TRUE duplicates<br/>reclaim = total − largest copy"]
+    Cnf -- no --> Tru["TRUE duplicates<br/>reclaim = total - largest copy"]
 ```
 
 Duplicate detection is report-only. Matching is by normalized name, so a `Q4` is never treated as a

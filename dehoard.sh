@@ -4,7 +4,7 @@
 setopt NULL_GLOB
 
 # Version, keep in sync with the CHANGELOG release heading and the git tag.
-DEHOARD_VERSION="0.1.0"
+DEHOARD_VERSION="0.2.0"
 
 # ─── USER CONFIG ────────────────────────────────────────────────────────────
 # Extra directories to include when scanning for projects (git gc, etc.).
@@ -67,8 +67,11 @@ FLAGS
   --apply         actually delete (default is preview-only)
   --dry-run       force preview, overrides --apply and DEHOARD_APPLY_DEFAULT
   --yes / -y      auto-confirm every prompt (combine with --apply; use with care)
-  --pick          interactive multiselect of --scan candidates via fzf (implies --scan; needs fzf
-                  installed and --apply; falls back to per-item prompts if fzf is absent)
+  --pick          interactive fzf picker for --scan candidates: ONE picker per category, biggest first
+                  (implies --scan; needs fzf + --apply). Interactive-only: runs JUST the pickers, not
+                  the Tier 1 auto-sweep. In each category: TAB mark, Ctrl-A all, Ctrl-D none, Enter to
+                  confirm, Esc skips that category; the preview shows size/last-modified/recreate/caveat.
+                  Falls back to per-item prompts without fzf; under --dry-run it just previews the list.
   --report        read-only audit; never deletes
   --json          machine-readable model inventory (implies --report; pure JSON on stdout)
                   e.g. dehoard --json | jq '.cross_tool_duplicates'
@@ -81,7 +84,8 @@ Flags combine in any order. Without --apply, every run is a safe preview.
 Recommended: run once to preview, then add --apply. Tier 1 always runs first.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-TIER 1: Runs always. Zero consequences. Safe to run anytime.
+TIER 1: Runs always. Regenerable caches, safe to run anytime (large package-manager
+        caches like Maven/Gradle re-download on the next build).
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   1. Browser update clones
@@ -118,7 +122,7 @@ TIER 1: Runs always. Zero consequences. Safe to run anytime.
      bun pm cache rm             → clears Bun's install cache
      trunk cache prune           → clears Trunk linter/tool cache
      In all cases: your installed packages are NOT removed.
-     Only cached downloads are cleared. Re-installs are slower once.
+     Only cached downloads are cleared; re-installing re-downloads them once.
 
   6. node-gyp cache (~/Library/Caches/node-gyp)
      node-gyp downloads C header files to compile native Node modules.
@@ -176,7 +180,7 @@ TIER 1: Runs always. Zero consequences. Safe to run anytime.
      few minutes into a hidden .ipynb_checkpoints folder. When you
      close the notebook, the checkpoints are never deleted.
      These are NOT your actual notebooks, your .ipynb files are safe.
-     Searched in: ~/Documents, ~/src
+     Searched in: ~ (whole home, to depth 10; node_modules/.venv/.git/.cache/Library pruned)
 
  10. Old installer DMGs in ~/Downloads (>30 days old, >50 MB)
      .dmg files are disk images used to install apps. Once installed,
@@ -295,14 +299,15 @@ TIER 2: Only with --deep. There is a real cost after deletion.
      a new snapshot (happens automatically in ~1 hour).
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-MODELS (--models): Interactive. Shows each item, you decide.
+MODELS (--models): Interactive, per-tool confirmation.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   How it works:
-    Each section lists its contents with individual sizes, then
-    asks 'Delete all? [y/N]'. Type y then Enter to delete, or
-    just Enter (or anything else) to skip. Defaults to No.
-    If run non-interactively (piped/scripted), always skips.
+    Per tool (not per model): each section lists its contents
+    with sizes, then asks once to clear that tool's set, e.g.
+    'Delete all Ollama models? [y/N]'. Type y then Enter to
+    delete, or just Enter (or anything else) to skip. Defaults
+    to No. If run non-interactively (piped/scripted), skips.
 
   1. Ollama models (~/.ollama/models)
      Runs 'ollama list' to show installed models and their sizes.
@@ -493,8 +498,9 @@ SCAN (--scan): Crawls your project tree. Per-entry prompts.
   ── Orphaned dev/ML tool data ── PER ENTRY
      Leftover data dirs of dev/ML tools whose binary/app is gone (e.g.
      ~/.ollama after Ollama is removed). Conservative: only flags tools
-     reliably detectable as absent. For GENERAL app-uninstall leftovers,
-     use Pearcleaner, dehoard does not scan all of ~/Library.
+     reliably detectable as absent. General app-uninstall leftovers are
+     out of scope, a dedicated app uninstaller is the right tool; dehoard
+     does not scan all of ~/Library.
 
   ── Tool caches >100 MB (~/.cache, ~/Library/Caches) ── PER ENTRY
      Generic catch-all. Instead of enumerating every language's cache dir
@@ -659,6 +665,10 @@ fi
 $JSON || echo ""   # blank separator for humans; never on stdout under --json (must be pure JSON)
 
 BEFORE=$(df -k / | awk 'NR==2 {print $4}')
+# Honest reclaim accounting: sum of the sizes of what dehoard ACTUALLY deletes (KB), tallied as it
+# deletes. The final "Storage freed" reports THIS, not a whole-disk `df` delta, which would otherwise
+# credit dehoard for ambient disk churn (browsers, Spotlight, other processes) during the run.
+_FREED_KB=0
 # Deletion log (only in --apply mode), a record of what was removed, when.
 LOGFILE=""
 if $APPLY; then
@@ -675,6 +685,11 @@ _IGNORE_PATTERNS=()
 if ${DEHOARD_IGNORE_ENABLED:-true} && [[ -f "${HOME}/.cache/dehoard/ignore" ]]; then
   _IGNORE_PATTERNS=(${(f)"$(grep -v '^[[:space:]]*$' "${HOME}/.cache/dehoard/ignore" 2>/dev/null)"})
 fi
+
+# --pick registry: in-scope --scan candidates are appended here during the scan (only under
+# --pick + fzf + --apply) and presented in one fzf picker afterwards. See _register/_run_picker.
+_PICK_ITEMS=()
+_COLLECT=false
 
 # ── Shared helpers ──────────────────────────────────────
 # Prompts y/N only when stdin is a terminal; defaults to N otherwise.
@@ -770,15 +785,17 @@ _rm() {
       [[ -e "$target" ]] && echo "  [preview] would delete: $target ($(du -sh "$target" 2>/dev/null | cut -f1))"
     done
   else
-    local _sz=""
+    local _sz="" _szk=0
     for target in "$_todo[@]"; do
       [[ -e "$target" ]] || continue
       _sz=$(du -sh "$target" 2>/dev/null | cut -f1)
+      _szk=$(du -sk "$target" 2>/dev/null | cut -f1); [[ -n "$_szk" ]] || _szk=0   # KB, for honest reclaim tally
       # Delete FIRST, report only on success: never print "removed:" for something that did not
       # actually go. rm's own errors are routed to the deletion log, not the terminal, so a
       # permission-denied tree (e.g. root-owned CPAN build dirs) can't flood the screen.
       if rm -rf "$target" 2>>"${LOGFILE:-/dev/null}"; then
         echo "  removed: ${target/#$HOME/~} (${_sz})"                  # human-visible: what was actually deleted
+        (( _FREED_KB += _szk ))                                        # count only what actually went
         [[ -n "$LOGFILE" ]] && printf '%s\t%s\n' "$_sz" "$target" >> "$LOGFILE"   # raw record (never colored)
       else
         echo "$(c_warn "  ⚠️  could not remove ${target/#$HOME/~} (permission denied; if root-owned, try: sudo rm -rf '${target/#$HOME/~}')")" >&2
@@ -819,61 +836,173 @@ _pm_run() {
   return 0
 }
 
-# Interactive multiselect support (optional, via fzf). Used only by --pick. fzf is NOT a hard
-# dependency: when it is absent we fall back to the per-item prompts. DEHOARD_FORCE_PICKER=1 lifts
-# the TTY requirement for the hermetic test suite only (real use needs a terminal).
+# --- Interactive multiselect (--pick): one fzf picker per scan category, biggest first. --------
+# fzf is optional: when absent (or no TTY) we fall back to the per-section per-item prompts.
+# DEHOARD_FORCE_PICKER=1 lifts the TTY requirement for the hermetic test suite only.
 _have_picker() {
   command -v fzf &>/dev/null || return 1
   [[ -n "${DEHOARD_FORCE_PICKER:-}" ]] && return 0
   [[ -t 0 && -t 1 ]]
 }
 
-# Multiselect picker. $1 = header line. Reads candidate records on stdin, NUL-delimited, each as
-# "display-label<TAB>absolute-path". Writes the SELECTED absolute paths to stdout, NUL-delimited.
-# Safety contract: on cancel (Esc/Ctrl-C) or no selection, fzf emits nothing, so this emits nothing
-# and the caller deletes NOTHING. An empty selection is never treated as "select all".
-_pick() {
-  fzf --multi --read0 --print0 --delimiter=$'\t' --with-nth=1 \
-      --prompt='delete> ' --header="$1" 2>/dev/null \
-  | while IFS= read -r -d '' _rec; do
-      printf '%s\0' "${_rec#*$'\t'}"      # strip the label, keep the path after the first TAB
-    done
-}
-
-# Run one --pick section. Args after $1/$2 are candidate records, each "display-label<TAB>abs-path".
-# Shows them in the picker (you TAB the ones to delete, leave the rest), then PRINTS the chosen set
-# back for a final look, asks once, and deletes via _rm (which previews under --dry-run, re-checks
-# the safe-root guard, and honors the ignore list). Cancel / empty selection keeps everything.
-# $1 = section noun (for the prompts), $2 = recreate hint to print after deletion ("" for none).
-_pick_section() {
-  local _noun="$1" _hint="$2"; shift 2
-  (( $# )) || { echo "$(c_dim "  None found.")"; return 0; }
-  local -a _sel=(); local _p _tot=0
-  while IFS= read -r -d '' _p; do [[ -n "$_p" ]] && _sel+=("$_p"); done < <(
-    printf '%s\0' "$@" | _pick "$_noun: TAB to mark for deletion, Enter to confirm, Esc keeps all"
-  )
-  if (( ${#_sel[@]} == 0 )); then echo "  Nothing selected, keeping all ${_noun}."; return 0; fi
-  echo "$(c_head "  Selected for deletion:")"
-  for _p in "${_sel[@]}"; do
-    printf "    %8s  %s\n" "$(du -sh "$_p" 2>/dev/null | cut -f1)" "${_p/#$HOME/~}"
-    _tot=$(( _tot + $(du -sk "$_p" 2>/dev/null | cut -f1) ))
+# Register scan candidates for the picker. Each record is TAB-delimited with 8 fields and
+# NO empty fields (sentinel '-'), so zsh field-splitting can't collapse them:
+#   type \t category \t size_kb \t mtime \t display \t hint \t note \t abs_path
+# 'type' (rm|conda|uv|android|cargo) drives deletion in _pick_delete.
+_register() {  # $1=type $2=category $3=hint $4=note ; rest = absolute paths
+  local _ty="$1" _cat="$2" _hint="$3" _note="$4"; shift 4
+  [[ -n "$_hint" ]] || _hint="-"; [[ -n "$_note" ]] || _note="-"
+  local _p _kb _mt _n=0
+  for _p in "$@"; do
+    [[ -e "$_p" ]] || continue
+    # The record (and the fzf line) are TAB/newline-delimited, so a path containing either would
+    # desync field-splitting and mis-map the selection. Such paths are near-nonexistent for the
+    # artifacts we scan; skip them from the picker (the non-pick per-item flow still handles them)
+    # rather than risk a wrong mapping. Fail-safe: a mis-mapped index would hit _rm's guards anyway.
+    [[ "$_p" == *$'\t'* || "$_p" == *$'\n'* ]] && continue
+    # Honor the ignore list HERE, at registration, so an "always skip" path never even enters the
+    # picker. This is the only ignore check for env-manager items: _pick_delete dispatches conda/uv/
+    # android/cargo to their native uninstaller (NOT through _rm), so the _rm ignore check would not
+    # see them. Filtering here covers every type uniformly. (rm-type items are still re-checked by _rm.)
+    if (( ${#_IGNORE_PATTERNS[@]} )) && _is_ignored "${_p%/}"; then
+      echo "$(c_dim "  ⊘ ignored: ${_p/#$HOME/~}")"
+      continue
+    fi
+    _kb=$(du -sk "$_p" 2>/dev/null | cut -f1); [[ -n "$_kb" ]] || _kb=0
+    _mt=$(stat -f '%Sm' -t '%Y-%m-%d' "$_p" 2>/dev/null); [[ -n "$_mt" ]] || _mt="-"
+    _PICK_ITEMS+=( "${_ty}"$'\t'"${_cat}"$'\t'"${_kb}"$'\t'"${_mt}"$'\t'"${_p/#$HOME/~}"$'\t'"${_hint}"$'\t'"${_note}"$'\t'"${_p}" )
+    (( _n++ ))
   done
-  if _ask "  Delete these ${#_sel[@]} ${_noun} (~$(( _tot / 1024 )) MB)?"; then
-    for _p in "${_sel[@]}"; do _rm "$_p"; done
-    [[ -n "$_hint" ]] && { $DRY_RUN || echo "  $_hint"; }
-  else
-    echo "  Cancelled, kept all ${_noun}."
-  fi
+  # Tie this verbose scan-section header to the SHORT picker-category slug it feeds, and confirm a
+  # count. Without this a registering section is silent under its cyan header in --pick, which reads
+  # as "found nothing"; and the header text ("Python/JS build outputs") never visibly matched the
+  # picker label ("build/dist"). This line bridges both.
+  (( _n )) && echo "$(c_dim "  → ${_n} found; shown in the picker below under category: ${_cat}")"
 }
 
-# Graceful exit on Ctrl+C or SIGTERM: report freed space so far.
+# Delete one selected item by type. Env-managers use their native uninstaller (rm of a conda env
+# dir leaves ghost entries in environments.txt + stale metadata) and self-scope to their own files;
+# everything else (and the `|| _rm` fallbacks) goes through _rm's safe-root guard. Ignored paths are
+# filtered upstream in _register, so nothing reaching here is on the ignore list.
+_pick_delete() {  # $1=type $2=abs_path
+  local _ty="$1" _p="$2" _name _pkg _sdk _c _sdkroot
+  # Honest reclaim tally for native-uninstaller branches (they bypass _rm, which would otherwise do
+  # the counting). Sized BEFORE deletion, while the path still exists; the `|| _rm` fallbacks and the
+  # default `_rm` branch already count themselves, so only the native success branches add here.
+  local _szk; _szk=$(du -sk "$_p" 2>/dev/null | cut -f1); [[ -n "$_szk" ]] || _szk=0
+  case "$_ty" in
+    conda)
+      _name="${${_p%/}:t}"
+      if command -v conda &>/dev/null && conda env remove -n "$_name" -y 2>>"${LOGFILE:-/dev/null}"; then
+        echo "  removed (conda env): $_name"; (( _FREED_KB += _szk ))
+      else _rm "$_p"; fi ;;
+    uv)
+      _name="${${_p%/}:t}"
+      if command -v uv &>/dev/null && uv python uninstall "$_name" 2>>"${LOGFILE:-/dev/null}"; then
+        echo "  removed (uv python): $_name"; (( _FREED_KB += _szk ))
+      else _rm "$_p"; fi ;;
+    android)
+      _pkg="system-images;${${_p:h:h}:t};${${_p:h}:t};${_p:t}"   # .../<api>/<tag>/<abi>
+      _sdkroot="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Library/Android/sdk}}"
+      _sdk=""
+      if command -v sdkmanager &>/dev/null; then _sdk="sdkmanager"; else
+        for _c in "$_sdkroot"/cmdline-tools/latest/bin/sdkmanager \
+                  "$_sdkroot"/cmdline-tools/*/bin/sdkmanager "$_sdkroot"/tools/bin/sdkmanager; do
+          [[ -x "$_c" ]] && { _sdk="$_c"; break; }
+        done
+      fi
+      if [[ -n "$_sdk" ]] && "$_sdk" --uninstall "$_pkg" 2>>"${LOGFILE:-/dev/null}"; then
+        echo "  removed (android): $_pkg"; (( _FREED_KB += _szk ))
+      else _rm "$_p"; fi ;;
+    cargo)
+      if command -v cargo &>/dev/null && cargo clean --manifest-path "${_p:h}/Cargo.toml" 2>>"${LOGFILE:-/dev/null}"; then
+        echo "  removed (cargo target): ${_p/#$HOME/~}"; (( _FREED_KB += _szk ))
+      else _rm "$_p"; fi ;;
+    *) _rm "$_p" ;;
+  esac
+}
+
+# The picker: open one fzf per category (biggest category first), prefaced by a per-category summary
+# as a contents page. Each picker shows only that category's candidates (TAB mark, Ctrl-A select-all,
+# Ctrl-D deselect-all, Esc skips the category), then reprints the chosen set, asks once, and dispatches
+# deletion by type before moving to the next category. Esc / empty selection deletes NOTHING (never
+# "empty = all"). Each fzf input line carries hidden fields for the preview pane and an index back into
+# _PICK_ITEMS.
+_run_picker() {
+  (( ${#_PICK_ITEMS[@]} )) || { echo "$(c_dim "  Nothing reclaimable found to pick from.")"; return 0; }
+  echo ""
+  echo "$(c_head "── Select what to delete (one picker per category, biggest first) ──")"
+  # NOTE: the {1..N} loop must never run with an empty registry: zsh `{1..0}` expands DESCENDING to
+  # `1 0` (invalid index 0). The early-return above guards it.
+  local _i _rec _mb _k; local -a _f; local -A _cat_n _cat_kb _cat_idx
+  for _i in {1..${#_PICK_ITEMS[@]}}; do
+    _rec="${_PICK_ITEMS[$_i]}"; _f=("${(@ps:\t:)_rec}")
+    _cat_n[${_f[2]}]=$(( ${_cat_n[${_f[2]}]:-0} + 1 ))
+    _cat_kb[${_f[2]}]=$(( ${_cat_kb[${_f[2]}]:-0} + ${_f[3]} ))
+    _cat_idx[${_f[2]}]="${_cat_idx[${_f[2]}]} $_i"   # space-joined registry indices for this category
+  done
+  # Table of contents: per-category totals, biggest first. One picker opens per category below.
+  echo "$(c_dim "  Reclaimable by category (a picker opens per category, biggest first; Esc skips one):")"
+  for _k in "${(@k)_cat_kb}"; do printf '%s\t%s\n' "${_cat_kb[$_k]}" "$_k"; done | sort -rn | while IFS=$'\t' read -r _ckb _c; do
+    printf "    %-14s %4d   %6d MB\n" "$_c" "${_cat_n[$_c]}" "$(( _ckb / 1024 ))"
+  done
+  # Categories in size-descending order.
+  local -a _cats_sorted
+  _cats_sorted=("${(@f)$(for _k in "${(@k)_cat_kb}"; do printf '%s\t%s\n' "${_cat_kb[$_k]}" "$_k"; done | sort -rn | cut -f2)}")
+  # One fzf per category. Esc / empty selection skips that category (deletes nothing); a scoped
+  # confirm precedes deletion, so each category is a self-contained unit (Ctrl-C keeps earlier ones).
+  local _c _ckb _idx _line _tot; local -a _clines _csel
+  for _c in "${_cats_sorted[@]}"; do
+    [[ -n "$_c" ]] || continue
+    echo ""
+    echo "$(c_step "▸ ${_c}  (${_cat_n[$_c]} item(s), $(( ${_cat_kb[$_c]} / 1024 )) MB)")"
+    _clines=()
+    for _idx in ${=_cat_idx[$_c]}; do
+      _rec="${_PICK_ITEMS[$_idx]}"; _f=("${(@ps:\t:)_rec}")
+      _mb=$(( ${_f[3]} / 1024 ))
+      # visible(1: size+path) \t idx(2) \t display(3) \t hint(4) \t note(5) \t mtime(6)
+      _clines+=( "$(printf '%6dM  %s\t%d\t%s\t%s\t%s\t%s' "$_mb" "${_f[5]}" "$_idx" "${_f[5]}" "${_f[6]}" "${_f[7]}" "${_f[4]}")" )
+    done
+    _csel=()
+    # --height=~80% keeps fzf INLINE (it would otherwise take the full alternate screen and blank the
+    # scan output above); '~' sizes the box to this category's item count, so a 1-item category shows a
+    # small box instead of an empty full screen. --layout=reverse puts the prompt/header at the top.
+    while IFS= read -r -d '' _line; do
+      [[ -n "$_line" ]] && _csel+=( "${${(@ps:\t:)_line}[2]}" )
+    done < <(
+      printf '%s\0' "${_clines[@]}" | fzf --multi --read0 --print0 \
+        --height=~80% --layout=reverse --border=rounded \
+        --delimiter=$'\t' --with-nth=1 --prompt="delete ${_c}> " \
+        --bind 'ctrl-a:select-all,ctrl-d:deselect-all' \
+        --header="${_c}: TAB mark   Ctrl-A all   Ctrl-D none   Enter confirm   Esc skip this category" \
+        --preview='printf "%s\n\nLast modified: %s\nRecreate: %s\nNote: %s" {3} {6} {4} {5}' \
+        --preview-window=down,6,wrap 2>/dev/null
+    )
+    if (( ${#_csel[@]} == 0 )); then echo "$(c_dim "  (skipped ${_c}, nothing selected)")"; continue; fi
+    echo "$(c_head "  Selected from ${_c}:")"
+    _tot=0
+    for _i in "${_csel[@]}"; do
+      _rec="${_PICK_ITEMS[$_i]}"; _f=("${(@ps:\t:)_rec}")
+      printf "    %6dM  %s\n" "$(( ${_f[3]} / 1024 ))" "${_f[5]}"
+      _tot=$(( _tot + ${_f[3]} ))
+    done
+    if _ask "  Delete these ${#_csel[@]} ${_c} item(s) (~$(( _tot / 1024 )) MB)?"; then
+      for _i in "${_csel[@]}"; do
+        _rec="${_PICK_ITEMS[$_i]}"; _f=("${(@ps:\t:)_rec}")
+        _pick_delete "${_f[1]}" "${_f[8]}"
+      done
+    else
+      echo "  kept ${_c}."
+    fi
+  done
+}
+
+# Graceful exit on Ctrl+C or SIGTERM: report freed space so far (from dehoard's own deletion tally,
+# not a df delta, same honesty rule as print_result).
 _cleanup_exit() {
   echo ""
   echo "$(c_warn "⚠️  Interrupted.")"
-  local AFTER DIFF_MB
-  AFTER=$(df -k / | awk 'NR==2 {print $4}')
-  DIFF_MB=$(( (AFTER - BEFORE) / 1024 ))
-  (( DIFF_MB > 0 )) && echo "$(c_safe "🗑️  Freed so far: ${DIFF_MB} MB")"
+  (( _FREED_KB > 0 )) && echo "$(c_safe "🗑️  Freed so far: $(( _FREED_KB / 1024 )) MB")"
   exit 130
 }
 trap _cleanup_exit INT TERM
@@ -888,7 +1017,7 @@ if $REPORT; then
   # Surface last --apply run from existing deletion logs (zero new state, reads only).
   # Use zsh array glob (not ls glob) so NULL_GLOB expands to empty when no logs exist.
   local _last_log _last_date _last_freed
-  local -a _logs; _logs=(~/.cache/dehoard/run-*.log(N.Om))   # N=nullglob Om=oldest-last→newest first
+  local -a _logs; _logs=(~/.cache/dehoard/run-*.log(N.om))   # N=nullglob, om=mtime newest-first → [1] is newest
   if (( ${#_logs} > 0 )); then
     _last_log="${_logs[1]}"
     _last_date=$(basename "$_last_log" .log | sed 's/run-//')
@@ -1134,7 +1263,8 @@ if $REPORT; then
   # ── Orphaned app caches (read-only count), apps removed, caches left behind ──
   # Map every installed .app to its CFBundleIdentifier, then flag ~/Library/Caches
   # folders named like a bundle id with no matching app. Report-only & count-only:
-  # dehoard stays dev/ML-scoped; removing general app leftovers is Pearcleaner's job.
+  # dehoard stays dev/ML-scoped; removing general app leftovers is out of scope (a job for a
+  # dedicated app uninstaller).
   typeset -A _inst_bid
   for _app in /Applications/*.app(N) ~/Applications/*.app(N) /System/Applications/*.app(N); do
     _bid=$(defaults read "$_app/Contents/Info" CFBundleIdentifier 2>/dev/null) || continue
@@ -1154,7 +1284,7 @@ if $REPORT; then
     echo "$(c_head "── Orphaned app caches (app no longer installed) ──")"
     printf "  %d cache folder(s), ~%s total in ~/Library/Caches with no matching app.\n" \
       "$_orphan_cache_n" "$(_hkb $_orphan_cache_kb)"
-    echo "  Read-only, dehoard stays dev/ML-scoped; use Pearcleaner to remove general app leftovers."
+    echo "  Read-only, dehoard stays dev/ML-scoped; general app leftovers are a job for a dedicated app uninstaller."
   fi
 
   # Ignore list summary
@@ -1287,11 +1417,11 @@ find ~ -maxdepth 10 \
      -o -name .cache -o -name Library -o -name .nvm -o -name .cursor \
      -o -name .vscode -o -name site-packages \) -prune -o \
   -name ".ipynb_checkpoints" -type d -print \
-  2>/dev/null | while read d; do _rm "$d"; done
+  2>/dev/null | while IFS= read -r d; do _rm "$d"; done
 
 echo "$(c_step "Removing old installer DMGs from ~/Downloads (>30 days, >50 MB)...")"
 find ~/Downloads -maxdepth 1 -name "*.dmg" -mtime +30 -size +50M 2>/dev/null \
-  | while read f; do
+  | while IFS= read -r f; do
     echo "  Removing: $(basename "$f") ($(du -sh "$f" 2>/dev/null | cut -f1))"
     _rm "$f"
   done
@@ -1343,9 +1473,16 @@ if $DEEP; then
   _rm "${BASE}/C/com.apple.metal"
 
   echo "$(c_step "Clearing system Apple caches (own user only)...")"
-  if $DRY_RUN; then
+  # This is the one delete that bypasses _rm (it needs sudo), so guard $BASE explicitly here rather
+  # than relying on NULL_GLOB: only proceed when $BASE is a real per-user temp root. A mis-computed
+  # BASE (e.g. unset $TMPDIR → "/") is refused, not handed to `sudo rm -rf`.
+  if [[ "$BASE" != /var/folders/* && "$BASE" != /private/var/folders/* ]]; then
+    echo "  $(c_dim "skipped system Apple caches: \$TMPDIR is not under /var/folders (BASE='${BASE}')")"
+  elif $DRY_RUN; then
     echo "  [dry-run] would delete: ${BASE}/C/com.apple.* (requires sudo)"
   else
+    # Intentionally NOT added to the _FREED_KB "Storage freed" tally: these are root-owned, so an
+    # accurate size needs `sudo du`, and the caches are small. Accepted under-count (never an over-count).
     sudo rm -rf "${BASE}/C/com.apple."* 2>/dev/null
   fi
 
@@ -1438,7 +1575,7 @@ if $DEEP; then
     [[ -d "$search_dir" ]] || continue
     find "$search_dir" -maxdepth 5 -name ".git" -type d \
       -not -path "*/.venv/*" -not -path "*/node_modules/*" 2>/dev/null \
-      | while read gitdir; do
+      | while IFS= read -r gitdir; do
           repo="${gitdir%/.git}"
           size_kb=$(du -sk "$gitdir" 2>/dev/null | cut -f1)
           if (( size_kb > 102400 )); then
@@ -1456,7 +1593,7 @@ if $DEEP; then
   if [[ -d "$_ANDROID_SDK/system-images" ]]; then
     ANDROID_IMG_SIZE=$(du -sh "$_ANDROID_SDK/system-images" 2>/dev/null | cut -f1)
     echo "Android SDK system-images: ${ANDROID_IMG_SIZE} (API levels installed:)"
-    ls "$_ANDROID_SDK/system-images/" 2>/dev/null | while read api; do
+    ls "$_ANDROID_SDK/system-images/" 2>/dev/null | while IFS= read -r api; do
       du -sh "$_ANDROID_SDK/system-images/$api/" 2>/dev/null | awk '{printf "  %s  %s\n", $1, $2}'
     done
     echo "  Remove old APIs: sdkmanager --uninstall \"system-images;android-XX;google_apis;x86_64\""
@@ -1494,6 +1631,10 @@ if $MODELS; then
     else
       ollama list 2>/dev/null
       if _ask "Delete all Ollama models?"; then
+        # ollama rm bypasses _rm; Ollama is content-addressed (per-model du is wrong), so measure the
+        # store size before/after and credit the delta to the honest "Storage freed" tally.
+        local _oll_before=0 _oll_after=0 _oll_d=0
+        $DRY_RUN || { _oll_before=$(du -sk ~/.ollama/models 2>/dev/null | cut -f1); [[ -n "$_oll_before" ]] || _oll_before=0; }
         for model in $OLLAMA_MODELS; do
           if $DRY_RUN; then
             echo "  [dry-run] would remove: $model"
@@ -1504,6 +1645,10 @@ if $MODELS; then
             fi
           fi
         done
+        if ! $DRY_RUN; then
+          _oll_after=$(du -sk ~/.ollama/models 2>/dev/null | cut -f1); [[ -n "$_oll_after" ]] || _oll_after=0
+          _oll_d=$(( _oll_before - _oll_after )); (( _oll_d > 0 )) && (( _FREED_KB += _oll_d ))
+        fi
       fi
     fi
   fi
@@ -1512,16 +1657,19 @@ if $MODELS; then
     echo ""
     LMS_SIZE=$(du -sh ~/.lmstudio/models 2>/dev/null | cut -f1)
     echo "$(c_head "── LM Studio models (${LMS_SIZE}) ──")"
-    find ~/.lmstudio/models -name "*.gguf" 2>/dev/null | while read f; do
+    find ~/.lmstudio/models -name "*.gguf" 2>/dev/null | while IFS= read -r f; do
       printf "  %-8s %s\n" "$(du -sh "$f" 2>/dev/null | cut -f1)" "${f/#$HOME\/.lmstudio\/models\//}"
     done
     if _ask "Delete all LM Studio .gguf files?"; then
       if $DRY_RUN; then
-        find ~/.lmstudio/models -name "*.gguf" 2>/dev/null | while read f; do
+        find ~/.lmstudio/models -name "*.gguf" 2>/dev/null | while IFS= read -r f; do
           echo "  [dry-run] would delete: $f"
         done
       else
+        # find -delete bypasses _rm, so tally the .gguf total (KB) for honest "Storage freed".
+        local _lms_kb; _lms_kb=$(find ~/.lmstudio/models -name "*.gguf" -exec du -sk {} + 2>/dev/null | awk '{s+=$1} END{print s+0}')
         find ~/.lmstudio/models -name "*.gguf" -delete 2>/dev/null
+        (( _FREED_KB += ${_lms_kb:-0} ))
         echo "  Done. Re-download models from the LM Studio app."
       fi
     fi
@@ -1576,6 +1724,16 @@ if $SCAN; then
   echo ""
   echo "$(c_bold "🔍 Scanning project tree for artifacts...")"
 
+  # --pick collection mode: only when --pick is set, fzf is usable, AND we're actually deleting
+  # (--apply, i.e. ! $DRY_RUN). In this mode in-scope sections REGISTER candidates instead of
+  # prompting, and the picker (_run_picker, one fzf per category) runs after the scan. Otherwise sections behave
+  # exactly as before (preview, or the per-item prompts when fzf is absent).
+  _COLLECT=false
+  $PICK && _have_picker && ! $DRY_RUN && _COLLECT=true
+  if $PICK && ! $_COLLECT && $DRY_RUN; then
+    echo "$(c_dim "  (--pick selects what to delete; it takes effect with --apply.)")"
+  fi
+
   # ── find -prune skip lists ─────────────────────────────────────────
   # These stop find from DESCENDING into dirs, so their contents are never seen.
   # Three variants: _SKIP (for artifact finds), _SKIP_ENV (keeps .venv/venv visible),
@@ -1623,16 +1781,9 @@ if $SCAN; then
   )"})
   VENV_TOTAL_KB=0
   FOUND_VENV=false
-  if $PICK && _have_picker && (( ${#VENV_CFGS[@]} )); then
-    # --pick: choose venvs in one fzf multiselect (preview-safe; _rm previews under --dry-run).
-    FOUND_VENV=true
-    local -a _vrecs=(); local _d _kb
-    for cfg in $VENV_CFGS; do
-      _d="${cfg:h}"; [[ -d "$_d" ]] || continue
-      _kb=$(du -sk "$_d" 2>/dev/null | cut -f1)
-      _vrecs+=( "$(printf '%6dM  %s  %s\t%s' "$(( _kb / 1024 ))" "$(stat -f '%Sm' -t '%Y-%m-%d' "$_d" 2>/dev/null)" "${_d/#$HOME/~}" "$_d")" )
-    done
-    _pick_section "venv(s)" "Recreate any venv: python -m venv <dir> / uv sync / poetry install." "${_vrecs[@]}"
+  if $_COLLECT; then
+    local -a _vd=(); for cfg in $VENV_CFGS; do [[ -d "${cfg:h}" ]] && _vd+=("${cfg:h}"); done
+    (( ${#_vd[@]} )) && { FOUND_VENV=true; _register rm "venv" "python -m venv <dir> / uv sync / poetry install" "-" "${_vd[@]}"; }
   else
   for cfg in $VENV_CFGS; do
     d="${cfg:h}"                 # venv dir = parent of pyvenv.cfg
@@ -1670,6 +1821,7 @@ if $SCAN; then
     [[ -d "$conda_base/envs" ]] || continue
     for d in "$conda_base/envs"/*/; do
       [[ -d "$d" ]] || continue
+      if $_COLLECT; then FOUND_CONDA=true; _register conda "conda env" "conda create -n <name> python=3.x" "removed via 'conda env remove' to avoid stale environments.txt metadata" "$d"; continue; fi
       FOUND_CONDA=true
       size_kb=$(du -sk "$d" 2>/dev/null | cut -f1)
       size_mb=$(( size_kb / 1024 ))
@@ -1680,7 +1832,9 @@ if $SCAN; then
         if $DRY_RUN; then
           echo "  [dry-run] would remove conda env: $env_name"
         else
-          conda env remove -n "$env_name" -y 2>/dev/null || _rm "$d"
+          # Count toward the honest "Storage freed" tally only on a real native removal; the _rm
+          # fallback counts itself, so guard to the success branch to avoid double-counting.
+          if conda env remove -n "$env_name" -y 2>/dev/null; then (( _FREED_KB += size_kb )); else _rm "$d"; fi
           echo "         Deleted. Recreate: conda create -n $env_name python=3.x"
         fi
         CONDA_TOTAL_KB=$(( CONDA_TOTAL_KB + size_kb ))
@@ -1698,16 +1852,18 @@ if $SCAN; then
   if [[ -d "$_UV_PY_DIR" ]]; then
     for d in "$_UV_PY_DIR"/*/; do
       [[ -d "$d" ]] || continue
+      if $_COLLECT; then FOUND_UV_PY=true; _register uv "uv python" "uv python install <name>" "removed via 'uv python uninstall'" "$d"; continue; fi
       FOUND_UV_PY=true
       py_name=$(basename "$d")
-      size_mb=$(( $(du -sk "$d" 2>/dev/null | cut -f1) / 1024 ))
+      size_kb=$(du -sk "$d" 2>/dev/null | cut -f1); size_mb=$(( size_kb / 1024 ))
       modified=$(stat -f "%Sm" -t "%Y-%m-%d" "$d" 2>/dev/null)
       printf "  %5dM  %s  %s\n" "$size_mb" "$modified" "$py_name"
       if _ask "         Uninstall?"; then
         if $DRY_RUN; then
           echo "  [dry-run] would run: uv python uninstall $py_name"
         elif command -v uv &>/dev/null; then
-          uv python uninstall "$py_name" 2>/dev/null || _rm "$d"
+          # Count freed space only on a real native uninstall; _rm fallback counts itself.
+          if uv python uninstall "$py_name" 2>/dev/null; then (( _FREED_KB += size_kb )); else _rm "$d"; fi
           echo "         Uninstalled. Reinstall: uv python install $py_name"
         else
           _rm "$d"
@@ -1744,15 +1900,17 @@ if $SCAN; then
         for abi_dir in "$tag_dir"*/; do
           [[ -d "$abi_dir" ]] || continue
           abi=$(basename "$abi_dir")              # e.g. arm64-v8a
+          if $_COLLECT; then FOUND_ANDROID=true; _register android "android sysimg" "sdkmanager --install <pkg>" "removed via 'sdkmanager --uninstall'" "$abi_dir"; continue; fi
           FOUND_ANDROID=true
-          size_mb=$(( $(du -sk "$abi_dir" 2>/dev/null | cut -f1) / 1024 ))
+          size_kb=$(du -sk "$abi_dir" 2>/dev/null | cut -f1); size_mb=$(( size_kb / 1024 ))
           printf "  %5dM  %s / %s / %s\n" "$size_mb" "$api" "$tag" "$abi"
           if _ask "         Remove?"; then
             pkg="system-images;$api;$tag;$abi"    # valid 4-segment sdkmanager path
             if $DRY_RUN; then
               echo "  [dry-run] would run: sdkmanager --uninstall \"$pkg\""
             elif [[ -n "$_SDKMANAGER" ]]; then
-              "$_SDKMANAGER" --uninstall "$pkg" 2>/dev/null || _rm "$abi_dir"
+              # Count freed space only on a real native uninstall; _rm fallback counts itself.
+              if "$_SDKMANAGER" --uninstall "$pkg" 2>/dev/null; then (( _FREED_KB += size_kb )); else _rm "$abi_dir"; fi
             else
               _rm "$abi_dir"
             fi
@@ -1787,6 +1945,11 @@ if $SCAN; then
       ext_kb=$(( ext_kb + $(du -sk "$ext_dir/$s" 2>/dev/null | cut -f1) ))
     done
     (( ${#on_disk[@]} )) || continue
+    if $_COLLECT; then
+      EXT_FOUND=true; local -a _ep=(); for s in $on_disk; do _ep+=("$ext_dir/$s"); done
+      _register rm "vscode-ext" "editor re-downloads on demand" "editor-flagged stale versions; active versions untouched" "${_ep[@]}"
+      continue
+    fi
     EXT_FOUND=true
     printf "  %-16s %d stale version folders on disk, %d MB\n" "$ed" "${#on_disk[@]}" "$(( ext_kb / 1024 ))"
     if _ask "         Delete ${ed}'s editor-flagged stale versions?"; then
@@ -1805,15 +1968,8 @@ if $SCAN; then
   )"})
   NM_TOTAL_KB=0
   FOUND_NM=false
-  if $PICK && _have_picker && (( ${#NM_DIRS[@]} )); then
-    FOUND_NM=true
-    local -a _nmrecs=(); local _d _kb
-    for _d in $NM_DIRS; do
-      [[ -d "$_d" ]] || continue
-      _kb=$(du -sk "$_d" 2>/dev/null | cut -f1)
-      _nmrecs+=( "$(printf '%6dM  %s  %s\t%s' "$(( _kb / 1024 ))" "$(stat -f '%Sm' -t '%Y-%m-%d' "$_d" 2>/dev/null)" "${_d/#$HOME/~}" "$_d")" )
-    done
-    _pick_section "node_modules" "Recreate: npm install (or yarn / pnpm install)." "${_nmrecs[@]}"
+  if $_COLLECT; then
+    (( ${#NM_DIRS[@]} )) && { FOUND_NM=true; _register rm "node_modules" "npm install (or yarn / pnpm install)" "-" "${NM_DIRS[@]}"; }
   else
   for d in $NM_DIRS; do
     FOUND_NM=true
@@ -1843,6 +1999,8 @@ if $SCAN; then
   )"})
   if (( ${#PY_CACHE_DIRS[@]} == 0 )); then
     echo "$(c_dim "  None found.")"
+  elif $_COLLECT; then
+    _register rm "py-cache" "auto-regenerated on next run" "-" "${PY_CACHE_DIRS[@]}"
   else
     PC_KB=0
     for d in $PY_CACHE_DIRS; do
@@ -1865,7 +2023,9 @@ if $SCAN; then
       \( -name "*.pyc" -o -name "*.pyo" \) -print \
       2>/dev/null | sort -u
   )"})
-  if (( ${#PYC_FILES[@]} == 0 )); then
+  if $_COLLECT; then
+    echo "$(c_dim "  Skipped in --pick (not a picker category); run plain 'dehoard --scan' to clean these.")"
+  elif (( ${#PYC_FILES[@]} == 0 )); then
     echo "$(c_dim "  None found.")"
   else
     PYC_KB=0
@@ -1889,6 +2049,8 @@ if $SCAN; then
   )"})
   if (( ${#EGG_DIRS[@]} == 0 )); then
     echo "$(c_dim "  None found.")"
+  elif $_COLLECT; then
+    _register rm "egg-info" "pip install -e ." "-" "${EGG_DIRS[@]}"
   else
     EGG_KB=0
     for d in $EGG_DIRS; do
@@ -1915,6 +2077,8 @@ if $SCAN; then
   )"})
   if (( ${#BUILD_DIRS[@]} == 0 )); then
     echo "$(c_dim "  None found.")"
+  elif $_COLLECT; then
+    _register rm "build/dist" "python -m build / npm run build / cmake" "some projects commit dist/ for releases; review before deleting" "${BUILD_DIRS[@]}"
   else
     BUILD_KB=0
     for d in $BUILD_DIRS; do
@@ -1934,9 +2098,19 @@ if $SCAN; then
   echo ""
   echo "$(c_head "── Rust build artifacts (target/, validated by Cargo.toml) ──")"
   RUST_FOUND=false
-  find ~ -maxdepth 6 \
-    \( "${_SKIP_ENV[@]}" \) -prune -o \
-    -name "Cargo.toml" -type f -print 2>/dev/null | sort -u | while read ct; do
+  # Collect into an array first (a `find | while` pipe runs in a subshell in zsh, so the --pick
+  # registry appends inside it would be lost).
+  RUST_CARGOS=(${(f)"$(
+    find ~ -maxdepth 6 \( "${_SKIP_ENV[@]}" \) -prune -o -name "Cargo.toml" -type f -print 2>/dev/null | sort -u
+  )"})
+  if $_COLLECT; then
+    for ct in $RUST_CARGOS; do
+      [[ -d "${ct:h}/target" ]] || continue
+      RUST_FOUND=true
+      _register cargo "rust target" "cargo build" "removed via 'cargo clean'" "${ct:h}/target"
+    done
+  else
+  for ct in $RUST_CARGOS; do
     d=$(dirname "$ct")
     [[ -d "$d/target" ]] || continue
     RUST_FOUND=true
@@ -1948,12 +2122,14 @@ if $SCAN; then
       if $DRY_RUN; then
         echo "  [dry-run] would run: cargo clean in ${d/#$HOME/~}"
       elif command -v cargo &>/dev/null; then
-        cargo clean --manifest-path "$ct" 2>/dev/null || _rm "$d/target"
+        # Count freed space only on a real native clean; _rm fallback counts itself.
+        if cargo clean --manifest-path "$ct" 2>/dev/null; then (( _FREED_KB += size_kb )); else _rm "$d/target"; fi
       else
         _rm "$d/target"
       fi
     fi
   done
+  fi
   $RUST_FOUND || echo "  None found."
 
   # ── Python test/coverage artifacts (batch) ─────────
@@ -1969,6 +2145,8 @@ if $SCAN; then
   )"})
   if (( ${#COV_ITEMS[@]} == 0 )); then
     echo "$(c_dim "  None found.")"
+  elif $_COLLECT; then
+    _register rm "coverage" "regenerated on next test run" "-" "${COV_ITEMS[@]}"
   else
     COV_KB=0
     for item in $COV_ITEMS; do kb=$(du -sk "$item" 2>/dev/null | cut -f1); COV_KB=$(( COV_KB + kb )); done
@@ -1988,6 +2166,8 @@ if $SCAN; then
   )"})
   if (( ${#HPROF_FILES[@]} == 0 )); then
     echo "$(c_dim "  None found.")"
+  elif $_COLLECT; then
+    _register rm "jvm-hprof" "regenerated on next heap dump" "-" "${HPROF_FILES[@]}"
   else
     for f in $HPROF_FILES; do
       [[ -f "$f" ]] || continue
@@ -1999,8 +2179,21 @@ if $SCAN; then
   # ── ROS2 colcon workspace artifacts (batch) ─────────
   echo ""
   echo "$(c_head "── ROS2 colcon workspace artifacts (build/, install/, log/) ──")"
-  find ~ -maxdepth 5 \( "${_SKIP[@]}" \) -prune -o -name "src" -type d -print \
-    2>/dev/null | sort -u | while read src_dir; do
+  # Collect src dirs into an array first (a `find | while` pipe is a subshell in zsh → registry
+  # appends inside it would be lost).
+  ROS2_SRCS=(${(f)"$(
+    find ~ -maxdepth 5 \( "${_SKIP[@]}" \) -prune -o -name "src" -type d -print 2>/dev/null | sort -u
+  )"})
+  if $_COLLECT; then
+    local _ws _rsub   # NOT _sub: re-declaring an already-set local elsewhere makes zsh echo it
+    for src_dir in $ROS2_SRCS; do
+      _ws="${src_dir:h}"
+      for _rsub in build install log; do
+        [[ -d "$_ws/$_rsub" ]] && _register rm "ros2" "cd <ws> && colcon build" "-" "$_ws/$_rsub"
+      done
+    done
+  else
+  for src_dir in $ROS2_SRCS; do
     ws=$(dirname "$src_dir")
     any_found=false
     for subdir in build install log; do
@@ -2017,11 +2210,14 @@ if $SCAN; then
       fi
     fi
   done
+  fi
 
   # ── IPython command history (per entry, WARNING) ────
   echo ""
   echo "$(c_head "── IPython command history ──")"
-  if [[ -f ~/.ipython/profile_default/history.sqlite ]]; then
+  if $_COLLECT; then
+    echo "$(c_dim "  Skipped in --pick (not a picker category); run plain 'dehoard --scan' to clean this.")"
+  elif [[ -f ~/.ipython/profile_default/history.sqlite ]]; then
     IPYTHON_SIZE=$(du -sh ~/.ipython/profile_default/history.sqlite 2>/dev/null | cut -f1)
     echo "  ~/.ipython/profile_default/history.sqlite (${IPYTHON_SIZE})"
     echo "$(c_warn "  ⚠️  WARNING: this is your IPython command history, all past commands.")"
@@ -2046,6 +2242,8 @@ if $SCAN; then
   )"})
   if (( ${#R_FILES[@]} == 0 )); then
     echo "$(c_dim "  None found.")"
+  elif $_COLLECT; then
+    _register rm "r-artifacts" "regenerated on next R session" ".RData holds your saved R workspace variables; review before deleting" "${R_FILES[@]}"
   else
     R_KB=0
     for f in $R_FILES; do
@@ -2071,7 +2269,9 @@ if $SCAN; then
          -o -name "*.nav" -o -name "*.snm" \) -print \
       2>/dev/null | sort -u
   )"})
-  if (( ${#TEX_FILES[@]} == 0 )); then
+  if $_COLLECT; then
+    echo "$(c_dim "  Skipped in --pick (not a picker category); run plain 'dehoard --scan' to clean these.")"
+  elif (( ${#TEX_FILES[@]} == 0 )); then
     echo "$(c_dim "  None found.")"
   else
     TEX_KB=0
@@ -2094,7 +2294,9 @@ if $SCAN; then
          -o -name ".AppleDouble" -o -name "._*" \) -print \
       2>/dev/null | sort -u
   )"})
-  if (( ${#MACOS_JUNK[@]} == 0 )); then
+  if $_COLLECT; then
+    echo "$(c_dim "  Skipped in --pick (not a picker category); run plain 'dehoard --scan' to clean these.")"
+  elif (( ${#MACOS_JUNK[@]} == 0 )); then
     echo "$(c_dim "  None found.")"
   else
     echo "  Found ${#MACOS_JUNK[@]} files, always safe to delete."
@@ -2116,13 +2318,8 @@ if $SCAN; then
   )"})
   if (( ${#SWAP_FILES[@]} == 0 )); then
     echo "$(c_dim "  None found.")"
-  elif $PICK && _have_picker; then
-    echo "  NOTE: *.swp files mean Vim had unsaved changes, review if Vim is open."
-    local -a _bkrecs=(); local _f
-    for _f in $SWAP_FILES; do
-      _bkrecs+=( "$(printf '%-8s  %s\t%s' "$(du -sh "$_f" 2>/dev/null | cut -f1)" "${_f/#$HOME/~}" "$_f")" )
-    done
-    _pick_section "backup/swap file(s)" "" "${_bkrecs[@]}"
+  elif $_COLLECT; then
+    _register rm "swap/backup" "regenerated by editor/compile" "*.swp can mean Vim had unsaved changes; review if Vim is open" "${SWAP_FILES[@]}"
   else
     for f in $SWAP_FILES; do
       printf "  %-8s %s\n" "$(du -sh "$f" 2>/dev/null | cut -f1)" "${f/#$HOME/~}"
@@ -2147,13 +2344,8 @@ if $SCAN; then
   )"})
   FOUND_LOG=false
   LOG_TOTAL_KB=0
-  if $PICK && _have_picker && (( ${#LOG_FILES[@]} )); then
-    FOUND_LOG=true
-    local -a _lgrecs=(); local _f
-    for _f in $LOG_FILES; do
-      _lgrecs+=( "$(printf '%-8s  %s\t%s' "$(du -sh "$_f" 2>/dev/null | cut -f1)" "${_f/#$HOME/~}" "$_f")" )
-    done
-    _pick_section "log file(s)" "" "${_lgrecs[@]}"
+  if $_COLLECT; then
+    (( ${#LOG_FILES[@]} )) && { FOUND_LOG=true; _register rm "logs" "regenerated at runtime" "-" "${LOG_FILES[@]}"; }
   else
   for f in $LOG_FILES; do
     FOUND_LOG=true
@@ -2186,6 +2378,10 @@ if $SCAN; then
     for p in $clean; do [[ -e "$p" ]] && existing+=("$p"); done
     for p in $keep;  do [[ -e "$p" ]] && kept+=("$p"); done
     (( ${#existing[@]} + ${#kept[@]} )) || return
+    if $_COLLECT; then
+      (( ${#existing[@]} )) && { AITOOL_FOUND=true; _register rm "ai-cache" "regenerated on next launch" "${label}: models/outputs/sessions are kept" "${existing[@]}"; }
+      return
+    fi
     AITOOL_FOUND=true
     echo "$(c_bold "  ▸ $label")"
     for p in $kept; do
@@ -2236,6 +2432,10 @@ if $SCAN; then
       (( ${#_targets[@]} && _akb >= 5120 )) || continue        # skip apps with <5 MB cache
       AITOOL_FOUND=true
       _name="${${_app%/}:t}"
+      if $_COLLECT; then
+        _register rm "app-cache" "regenerates on app launch" "${_name} Electron cache (quit the app first)" "${_targets[@]}"
+        continue
+      fi
       printf "  ▸ %-26s %6dM  (Electron app cache, regenerates on launch)\n" "$_name" "$(( _akb / 1024 ))"
       _ask "        Delete ${_name} app cache?" "${_app}" && { for _t in $_targets; do _rm "$_t"; done; }
     done
@@ -2245,6 +2445,10 @@ if $SCAN; then
   for _ss in ~/"Library/Saved Application State"/*.savedState(N/); do
     _sskb=$(du -sk "$_ss" 2>/dev/null | cut -f1); (( _sskb >= 5120 )) || continue
     AITOOL_FOUND=true
+    if $_COLLECT; then
+      _register rm "saved-state" "regenerated on next launch" "macOS saved window state" "$_ss"
+      continue
+    fi
     printf "  ▸ %-26s %6dM  (saved window state)\n" "${${_ss%/}:t}" "$(( _sskb / 1024 ))"
     _ask "        Delete saved state for ${${_ss%/}:t}?" "$_ss" && _rm "$_ss"
   done
@@ -2253,11 +2457,11 @@ if $SCAN; then
 
   # ── Orphaned dev/ML tool data (tool gone, data dir left behind) ──
   # NARROW + conservative: only tools whose absence is reliably detectable (binary
-  # NOT on PATH *and* no matching .app). For general app-uninstall leftovers, use
-  # Pearcleaner, dehoard intentionally does NOT scan all of ~/Library.
+  # NOT on PATH *and* no matching .app). General app-uninstall leftovers are out of
+  # scope (a dedicated app uninstaller's job); dehoard intentionally does NOT scan all of ~/Library.
   echo ""
   echo "$(c_head "── Orphaned dev/ML tool data (binary/app missing, data remains) ──")"
-  echo "  For general app leftovers use Pearcleaner; this is dev/ML tools only."
+  echo "  General app leftovers are out of scope (use a dedicated app uninstaller); this is dev/ML tools only."
   ORPHAN_FOUND=false
   _orphan() {  # $1=binary $2=app(.app name or '') ; rest = data dirs
     local bin="$1" app="$2"; shift 2
@@ -2268,6 +2472,7 @@ if $SCAN; then
       [[ -d "$p" ]] || continue
       kb=$(du -sk "$p" 2>/dev/null | cut -f1); (( kb >= 1024 )) || continue   # skip <1MB
       ORPHAN_FOUND=true
+      if $_COLLECT; then _register rm "orphaned" "data for an uninstalled tool" "'$bin' not on PATH and no matching .app; leftover data" "$p"; continue; fi
       printf "  %-7s %s  (last used %s)\n" "$(du -sh "$p" 2>/dev/null | cut -f1)" \
         "${p/#$HOME/~}" "$(stat -f '%Sm' -t '%Y-%m-%d' "$p" 2>/dev/null)"
       _ask "         '$bin' not installed, delete leftover data?" "$p" && _rm "$p"
@@ -2303,6 +2508,9 @@ if $SCAN; then
   )"})
   if (( ${#CACHE_ENTRIES[@]} == 0 )); then
     echo "$(c_dim "  None over ${CACHE_MIN_MB} MB.")"
+  elif $_COLLECT; then
+    local _ce
+    for _ce in $CACHE_ENTRIES; do _register rm "cache" "regenerates (model/build caches re-download slowly)" "-" "${_ce#*$'\t'}"; done
   else
     CACHE_TOTAL_KB=0
     for entry in $CACHE_ENTRIES; do
@@ -2317,6 +2525,10 @@ if $SCAN; then
     done
     (( CACHE_TOTAL_KB > 0 )) && ! $DRY_RUN && echo "  Freed from caches: $(( CACHE_TOTAL_KB / 1024 )) MB"
   fi
+
+  # --pick: every in-scope section above registered (not deleted) its candidates; now run the
+  # picker (one fzf per category) that does the actual, type-aware deletion.
+  $_COLLECT && _run_picker
 fi
 
 }
@@ -2326,10 +2538,12 @@ print_result() {
 # Result
 # ══════════════════════════════════════════════════════
 
-AFTER=$(df -k / | awk 'NR==2 {print $4}')
-DIFF_KB=$(( AFTER - BEFORE ))
-DIFF_MB=$(( DIFF_KB / 1024 ))
-DIFF_GB=$(echo "scale=2; $DIFF_MB / 1024" | bc)
+# "Storage freed" reflects what dehoard ACTUALLY deleted (the $_FREED_KB tally, summed in _rm and the
+# native-uninstaller branches), NOT a whole-disk df delta, which would credit dehoard for ambient disk
+# churn during the run (the user once saw "freed 860 KB" after deleting nothing). The df figure is kept
+# only as ambient "Free space now" context, clearly separated from the reclaim number.
+FREED_MB=$(( _FREED_KB / 1024 ))
+FREED_GB=$(echo "scale=2; $FREED_MB / 1024" | bc)
 
 echo ""
 if $DRY_RUN; then
@@ -2341,29 +2555,34 @@ if $DRY_RUN; then
 else
   echo "$(c_safe "✅ Reclaim complete!")"
   echo "$(c_dim "━━━━━━━━━━━━━━━━━━━━━━━━")"
-  if (( DIFF_MB >= 1024 )); then
-    echo "$(c_safe "🗑️  Storage freed: ${DIFF_GB} GB")"
-  elif (( DIFF_MB > 0 )); then
-    echo "$(c_safe "🗑️  Storage freed: ${DIFF_MB} MB")"
-  elif (( DIFF_KB > 0 )); then
-    echo "$(c_safe "🗑️  Storage freed: ${DIFF_KB} KB")"
+  if (( FREED_MB >= 1024 )); then
+    echo "$(c_safe "🗑️  Storage freed: ${FREED_GB} GB")"
+  elif (( FREED_MB > 0 )); then
+    echo "$(c_safe "🗑️  Storage freed: ${FREED_MB} MB")"
+  elif (( _FREED_KB > 0 )); then
+    echo "$(c_safe "🗑️  Storage freed: ${_FREED_KB} KB")"
   else
-    echo "$(c_dim "🗑️  Nothing new to clean (already tidy)")"
+    echo "$(c_dim "🗑️  Nothing deleted.")"
   fi
-  echo "$(c_safe "💾 Free space now: $(df -h / | awk 'NR==2 {print $4}')")"
+  echo "$(c_dim "💾 Free space now: $(df -h / | awk 'NR==2 {print $4}') (whole disk; varies with other activity)")"
   echo "$(c_dim "━━━━━━━━━━━━━━━━━━━━━━━━")"
   command -v osascript &>/dev/null && \
-    osascript -e "display notification \"Freed ${DIFF_MB} MB, $(df -h / | awk 'NR==2 {print $4}') free\" with title \"dehoard ✅\"" 2>/dev/null
+    osascript -e "display notification \"Freed ${FREED_MB} MB, $(df -h / | awk 'NR==2 {print $4}') free\" with title \"dehoard ✅\"" 2>/dev/null
 fi
 }
 
 # ── Dispatch: run-mode selection (each cleanup function self-guards on its flag) ──
 main() {
   run_report      # read-only; exits the script if --report/--json
-  clean_tier1     # always-safe caches
-  clean_deep      # Tier 2 (self-guards on $DEEP)
-  clean_models    # self-guards on $MODELS
-  run_scan        # self-guards on $SCAN
+  # --pick is an INTERACTIVE-ONLY mode: it must not trigger the automatic batch sweeps (Tier 1
+  # caches, --deep, --models) or their sudo prompts. The only thing it deletes is what you mark in
+  # the one scan picker. Without --pick, behavior is unchanged (bare run = Tier 1; flags add).
+  if ! $PICK; then
+    clean_tier1     # always-safe caches
+    clean_deep      # Tier 2 (self-guards on $DEEP)
+    clean_models    # self-guards on $MODELS
+  fi
+  run_scan        # self-guards on $SCAN; under --pick this is the sole deleter (one fzf picker per category)
   print_result
 }
 main "$@"

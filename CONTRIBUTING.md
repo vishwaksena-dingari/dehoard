@@ -5,9 +5,13 @@ Thanks for your interest! `dehoard` is a single auditable zsh script, small, saf
 ## Principles (please respect these in PRs)
 
 1. **Preview by default.** Nothing deletes without `--apply`. Every new cleanup path must go
-   through the `_rm` helper (which is preview-aware and guards `$HOME` / `/`).
-2. **Only regenerable data.** We delete caches, build artifacts, downloadable model weights, and
-   editor-flagged stale versions, never user source, git history, documents, or media.
+   through the `_rm` helper (which is preview-aware and guards `$HOME` / `/`). A few existing
+   deletions are audited exceptions (the `--deep` `sudo` system-cache sweep, `--models`' LM Studio
+   `find -delete`, the `--scan --pick` native env-manager uninstallers); do not add new ones.
+2. **Only regenerable data.** We delete caches, build artifacts, re-downloadable framework/model
+   *caches* (HuggingFace, NLTK, PyTorch hub), and editor-flagged stale versions, never user source,
+   git history, documents, or media. Actual model *weights* are user data: reported, and removed
+   only via an explicit `--models` choice, never in a Tier 1 or `--scan` batch sweep.
 3. **Machine-agnostic.** No hardcoded usernames, personal paths, or personal app bundle IDs.
    Drive everything off existence checks. CI rejects `/Users/<name>` paths.
 4. **Stay in the niche.** `dehoard` is for ML/dev Macs. We are *not* adding Photos/Mail/iOS-backup
@@ -21,6 +25,8 @@ Thanks for your interest! `dehoard` is a single auditable zsh script, small, saf
   `.obsolete`), not by hardcoded names.
 - Add it to the right tier: Tier 1 (always safe), `--deep` (real but recoverable cost),
   `--models` (ML weights), or `--scan` (per-project, interactive).
+- If it's a per-path `--scan` section, also support `--pick` by registering its candidates (see the
+  "Anatomy of a scanner" checklist in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)).
 - Add a `--help` entry and a `--report` line if it's sizable.
 
 ## Testing

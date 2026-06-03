@@ -5,6 +5,18 @@ Each local-model tool keeps its own copy in its own location under its own namin
 machine can hold the same 8B model three or four times without the user ever realizing it. This page
 maps where models hide and explains exactly how dehoard decides what is a true duplicate.
 
+## Who this is for
+
+- **A casual Ollama/LM Studio user** who just wants space back: run `dehoard --report` to see total
+  model footprint and any cross-tool duplicates, then `dehoard --models` to clear a tool you no longer
+  use. You never need to understand quant or variant tokens to benefit.
+- **A developer** with a model or two from a side project: the duplicate report is a quick win, it
+  tells you when the same model is sitting in two tools so you can drop one copy.
+- **An ML practitioner or researcher** (the real target) with many GB spread across HuggingFace,
+  Ollama, LM Studio, and PyTorch hub: this is where the cross-tool inventory earns its keep, surfacing
+  duplicate GB that no single tool can see. (It is also where today's per-tool removal is bluntest, see
+  the `--models` note below.)
+
 ## The storage map
 
 A *logical* model (say, Llama-3-8B-Instruct) becomes *physical* copies scattered across tools:
@@ -15,7 +27,7 @@ flowchart TD
     Disk --> OL["~/.ollama/models<br/>(content-addressed blobs) · llama3:8b"]
     Disk --> LM["~/.lmstudio/models<br/>Meta-Llama-3-8B-Instruct-Q8.gguf"]
     Disk --> PT["~/.cache/torch/hub/checkpoints"]
-    HF --> One{{"one logical model<br/>llama-3-8b"}}
+    HF --> One{{"one logical model<br/>llama-8b"}}
     OL --> One
     LM --> One
     One --> Note["N physical copies, often several GB each"]
@@ -29,8 +41,8 @@ flowchart TD
 | PyTorch hub | `~/.cache/torch/hub/checkpoints/` | file listing |
 
 Because the formats differ (safetensors vs GGUF vs content-addressed blobs), dehoard cannot dedupe
-by bytes. It matches by **normalized name** instead, which is why it is careful to distinguish a
-genuine duplicate from a merely *related* model.
+by bytes. It matches by **normalized name** instead, so it must distinguish a genuine duplicate from
+a merely *related* one.
 
 ## Normalization
 
@@ -49,7 +61,7 @@ Models that share a family+size key are grouped, then split:
 flowchart TD
     G["group: same family+size<br/>(e.g. all 'llama-8b')"] --> C{"within the group:<br/>≥2 known quants OR ≥2 variants?"}
     C -- yes --> R["RELATED variants<br/>e.g. Q4 vs Q8, or base vs instruct<br/>NOT interchangeable · NO reclaim claimed"]
-    C -- no --> T["TRUE duplicates<br/>same build in 2+ tools<br/>reclaim = total − largest copy"]
+    C -- no --> T["TRUE duplicates<br/>same build in 2+ tools<br/>reclaim = total - largest copy"]
 ```
 
 - A **true duplicate** is the same build sitting in two or more tools. Keeping one is safe, so
@@ -58,8 +70,33 @@ flowchart TD
   **not** interchangeable, so dehoard lists them for your awareness but **claims no reclaim**.
 - **Conservative by design:** an *unknown* quant never *creates* a conflict, so the headline still
   fires for genuine matches, but dehoard never over-claims. And the whole feature is **report-only**:
-  weights are never auto-deleted. You remove a redundant copy yourself via `--models` after
-  verifying the two really are the same build.
+  weights are never auto-deleted, and they are never offered in the `--scan --pick` picker either.
+  You remove a redundant copy yourself via `--models` after verifying the two really are the same build.
+
+### Cross-tool only, not within-tool
+
+Duplicate detection is strictly **cross-tool**: a group is reported only when the same model appears in
+**two or more different tools** (the code requires `≥2 copies AND ≥2 tools`). Two copies of the same
+model *inside a single tool* are **not** flagged. In practice this almost never happens, Ollama is
+content-addressed (identical blobs are stored once, so it cannot hold a true byte-duplicate of itself),
+and the others key models by name. So "is `llama3:8b` duplicated *within* Ollama?" is a question dehoard
+deliberately does not try to answer; "is `llama3:8b` *also* in LM Studio or HuggingFace?" is exactly
+what it answers.
+
+## Actually removing a copy: the `--models` flow
+
+The report tells you *what* is redundant; `dehoard --models` is how you remove it. Be aware of its
+current granularity: it is **per tool, not per model**. For each tool it lists the models with sizes,
+then asks once before clearing that tool's set, e.g. *"Delete all Ollama models? [y/N]"*, *"Clear the
+entire HuggingFace cache?"*. It defaults to **No**, runs nothing without `--apply`, and skips entirely
+when run non-interactively.
+
+For the re-downloadable framework caches (HuggingFace, NLTK, PyTorch hub) a whole-cache wipe is the
+right unit, they regenerate on next use. For your curated model libraries (Ollama, LM Studio) it is
+blunter than ideal: there is no built-in way to remove a *single* redundant copy the report identified,
+short of the tool's own command (`ollama rm <name>`) or deleting the `.gguf` yourself. Finer-grained,
+report-driven removal is on the roadmap (see [ARCHITECTURE.md](ARCHITECTURE.md)); until then, the report
+is the map and the tool's own delete is the surgical instrument.
 
 ## JSON schema
 

@@ -231,9 +231,11 @@ if grep -qiE -- "cleanup|autoremove|cache clean|cache purge|store prune|system p
 else
   ok "dry-run/preview ran ZERO destructive commands (core safety invariant, even under --deep)"
 fi
-# Sanity: dry-run DID still compute (read-only probe ran), proving the stubs were reachable
-grep -q -- "listlocalsnapshotdates" "$LOG" 2>/dev/null && ok "dry-run still ran the read-only probe (sudo tmutil listlocalsnapshotdates)" \
-  || ok "dry-run produced no destructive calls (no TM snapshots present to probe)"
+# Sanity (real assertion, not tautological): dry-run DID still run the read-only TM probe, proving
+# the stubs were actually reachable (so the "zero destructive" result above means something).
+grep -q -- "listlocalsnapshotdates" "$LOG" 2>/dev/null \
+  && ok "dry-run still ran the read-only probe (sudo tmutil listlocalsnapshotdates)" \
+  || bad "dry-run did not run the read-only TM probe (stubs unreachable? the safety check above is moot)"
 rm -rf "$FIX"
 
 # 5k, --report --json: pure, valid, machine-readable model inventory (the product-foundation primitive)
@@ -532,72 +534,258 @@ else
 fi
 rm -rf "$FIX"
 
-# 5A, --scan --pick (fzf multiselect): a selection deletes the chosen venvs; an aborted/empty
-#       selection deletes NOTHING (the safety contract); no fzf falls back to per-item prompts.
-#       fzf is stubbed; DEHOARD_FORCE_PICKER=1 lifts the TTY gate for the hermetic run.
-_mk_two_venvs() {  # $1 = HOME fixture
-  mkdir -p "$1/p1/.venv/bin" "$1/p2/env/bin"
-  echo "home = /x" > "$1/p1/.venv/pyvenv.cfg"; echo "home = /x" > "$1/p2/env/pyvenv.cfg"
-  : > "$1/p1/.venv/bin/python"; : > "$1/p2/env/bin/python"
-}
-# (a) selection: stub fzf = `cat` (echoes all input records back = select everything) → both deleted
-FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
-print -r -- $'#!/bin/sh\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
-_mk_two_venvs "$FIX"
-HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
-  zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
-[[ ! -d "$FIX/p1/.venv" && ! -d "$FIX/p2/env" ]] \
-  && ok "--pick: fzf-selected venvs are deleted (multiselect → _rm)" \
-  || bad "--pick: selected venvs were not deleted"
-rm -rf "$FIX"
-# (b) ABORT (the critical one): stub fzf emits nothing → NOTHING is deleted, even under --apply --yes
-FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
-print -r -- $'#!/bin/sh\nexit 0' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
-_mk_two_venvs "$FIX"
-HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
-  zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
-[[ -d "$FIX/p1/.venv" && -d "$FIX/p2/env" ]] \
-  && ok "--pick abort/empty selection deletes NOTHING (safety contract holds)" \
-  || bad "--pick abort DELETED a venv (safety contract broken!)"
-rm -rf "$FIX"
-# (c) no fzf → falls back to the per-item _ask prompts (still deletes under --yes)
-FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
-rm -f "$STUBDIR/fzf" 2>/dev/null              # ensure fzf is absent
-_mk_two_venvs "$FIX"
-HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" \
-  zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
-[[ ! -d "$FIX/p1/.venv" && ! -d "$FIX/p2/env" ]] \
-  && ok "--pick with no fzf falls back to per-item prompts (deleted under --yes)" \
-  || bad "--pick no-fzf fallback did not delete via _ask"
-rm -rf "$FIX"
-
-# 5B, --pick now also covers node_modules, project logs (>100 KB), and backup/swap files. Same
-#      contract: a selection deletes the chosen items; abort/empty keeps them ALL (so "keep my logs
-#      and .bak" = just don't mark them, or Esc).
-_mk_pick3() {  # $1 = HOME fixture: a node_modules, a >100KB log, a .bak
+# 5A, --pick = ONE unified fzf picker across all in-scope --scan categories. fzf is stubbed;
+#      DEHOARD_FORCE_PICKER=1 lifts the TTY gate. The stub stands in for the user's marking:
+#      `cat` = every record selected (≈ Ctrl-A select-all); `exit 0` = nothing marked (Esc/abort);
+#      a perl filter = mark only one category. The picker is delete-time only (needs --apply).
+_mk_mixed() {  # $1 = HOME fixture: a venv + a node_modules + a >100KB log + a .bak (4 categories)
+  mkdir -p "$1/p1/.venv/bin"; echo "home = /x" > "$1/p1/.venv/pyvenv.cfg"; : > "$1/p1/.venv/bin/python"
   mkdir -p "$1/proj/node_modules/x"; : > "$1/proj/node_modules/x/f"
   dd if=/dev/zero of="$1/proj/big.log" bs=1024 count=200 2>/dev/null   # >100K so it's scanned
   : > "$1/proj/notes.bak"
 }
-# (a) selection (stub fzf = cat): node_modules + log + bak all deleted
+# (a) select-all (stub fzf = cat → all records back): every category deleted
 FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
 print -r -- $'#!/bin/sh\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
-_mk_pick3 "$FIX"
+_mk_mixed "$FIX"
 HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
   zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
-[[ ! -d "$FIX/proj/node_modules" && ! -f "$FIX/proj/big.log" && ! -f "$FIX/proj/notes.bak" ]] \
-  && ok "--pick covers node_modules + logs + backups (selected items deleted)" \
-  || bad "--pick did not delete across node_modules/logs/backups"
+[[ ! -d "$FIX/p1/.venv" && ! -d "$FIX/proj/node_modules" && ! -f "$FIX/proj/big.log" && ! -f "$FIX/proj/notes.bak" ]] \
+  && ok "--pick select-all deletes across every category (venv+node_modules+log+bak)" \
+  || bad "--pick select-all did not delete every category"
 rm -rf "$FIX"
-# (b) abort (stub fzf emits nothing): node_modules + log + bak all KEPT
+# (b) ABORT (the critical one): stub fzf emits nothing → NOTHING deleted, even under --apply --yes
 FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
 print -r -- $'#!/bin/sh\nexit 0' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
-_mk_pick3 "$FIX"
+_mk_mixed "$FIX"
 HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
   zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
-[[ -d "$FIX/proj/node_modules" && -f "$FIX/proj/big.log" && -f "$FIX/proj/notes.bak" ]] \
-  && ok "--pick abort keeps node_modules + logs + backups (keep-logs/bak by not marking them)" \
-  || bad "--pick abort deleted something across node_modules/logs/backups!"
+[[ -d "$FIX/p1/.venv" && -d "$FIX/proj/node_modules" && -f "$FIX/proj/big.log" && -f "$FIX/proj/notes.bak" ]] \
+  && ok "--pick abort/empty selection deletes NOTHING (safety contract holds)" \
+  || bad "--pick abort DELETED something (safety contract broken!)"
+rm -rf "$FIX"
+# (c) PARTIAL cross-category: mark only node_modules → it goes, the other 3 categories survive
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+print -r -- $'#!/bin/sh\nexec perl -0 -ne \'print if /node_modules/\'' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
+_mk_mixed "$FIX"
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+  zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
+[[ ! -d "$FIX/proj/node_modules" && -d "$FIX/p1/.venv" && -f "$FIX/proj/big.log" && -f "$FIX/proj/notes.bak" ]] \
+  && ok "--pick partial selection deletes only marked category, keeps the rest" \
+  || bad "--pick partial selection deleted the wrong set"
+rm -rf "$FIX"
+# (d) no fzf → falls back to the per-item _ask prompts (still deletes under --yes)
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+rm -f "$STUBDIR/fzf" 2>/dev/null              # ensure fzf is absent
+_mk_mixed "$FIX"
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" \
+  zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
+[[ ! -d "$FIX/proj/node_modules" && ! -f "$FIX/proj/big.log" ]] \
+  && ok "--pick with no fzf falls back to per-item prompts (deleted under --yes)" \
+  || bad "--pick no-fzf fallback did not delete via _ask"
+rm -rf "$FIX"
+# (e) preview/dry-run: --pick WITHOUT --apply must NOT invoke fzf, must print the note, delete nothing
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+print -r -- $'#!/bin/sh\necho "fzf $*" >> "$STUB_LOG"\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
+_mk_mixed "$FIX"
+pno=$(HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+  zsh "$SCRIPT" --scan --pick 2>&1)
+[[ -d "$FIX/proj/node_modules" ]] && ! grep -q "^fzf" "$STUB_LOG" 2>/dev/null && grep -q "takes effect with --apply" <<< "$pno" \
+  && ok "--pick without --apply: no fzf invoked, prints the note, deletes nothing (preview)" \
+  || bad "--pick without --apply opened the picker or deleted/omitted the note"
+rm -rf "$FIX"
+# (f) typed deletion: a conda env is removed via 'conda env remove' (native), NOT raw rm of the dir
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+print -r -- $'#!/bin/sh\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
+mkdir -p "$FIX/miniconda3/envs/foo/lib"; : > "$FIX/miniconda3/envs/foo/lib/x"
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+  zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
+grep -q "conda env remove -n foo" "$STUB_LOG" && [[ -d "$FIX/miniconda3/envs/foo" ]] \
+  && ok "--pick typed deletion: conda env uses 'conda env remove' (not raw rm)" \
+  || bad "--pick conda env was raw-rm'd instead of using the native uninstaller"
+rm -rf "$FIX"
+# (g) a path containing a space round-trips through the NUL-delimited picker
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+print -r -- $'#!/bin/sh\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
+mkdir -p "$FIX/my proj/node_modules/x"; : > "$FIX/my proj/node_modules/x/f"
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+  zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
+[[ ! -d "$FIX/my proj/node_modules" ]] \
+  && ok "--pick handles a path with a space (NUL round-trip)" \
+  || bad "--pick failed on a path containing a space"
+rm -rf "$FIX"
+# (h) --pick is interactive-only: it must NOT run the Tier 1 auto-sweep (no brew/npm/yarn cleanup,
+#     no sudo TM-snapshot prompt) before the picker. Abort the picker (fzf=exit 0) and assert no
+#     package-manager stub was ever invoked.
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+print -r -- $'#!/bin/sh\nexit 0' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
+_mk_mixed "$FIX"
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+  zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
+! grep -qiE 'brew|npm|yarn|bun|tmutil|docker' "$STUB_LOG" 2>/dev/null \
+  && ok "--pick is interactive-only: Tier 1 auto-sweep is skipped (no batch tool invoked)" \
+  || bad "--pick ran the Tier 1 batch sweep (should run only the picker)"
+rm -rf "$FIX"
+# (i) a path containing a literal TAB is skipped from the picker (the TAB/newline-delimited record
+#     would otherwise desync field-splitting). select-all must delete the normal item and leave the
+#     tab-path item untouched, with no wrong deletion.
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+print -r -- $'#!/bin/sh\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
+_tab=$'\t'
+mkdir -p "$FIX/normal/node_modules/y"; : > "$FIX/normal/node_modules/y/f"
+mkdir -p "$FIX/tab${_tab}dir/node_modules/x"; : > "$FIX/tab${_tab}dir/node_modules/x/f"
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+  zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
+[[ ! -d "$FIX/normal/node_modules" && -d "$FIX/tab${_tab}dir/node_modules" ]] \
+  && ok "--pick skips a TAB-in-path item safely (normal deleted, tab-path kept, no mis-map)" \
+  || bad "--pick mishandled a TAB-in-path item"
+rm -rf "$FIX"
+# (j) typed deletion: uv python uses 'uv python uninstall <name>' (native), not raw rm. Stub uv
+#     exits 0 without deleting → dir survives → proves the native branch (not _rm) ran.
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+print -r -- $'#!/bin/sh\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
+mkdir -p "$FIX/.local/share/uv/python/cpython-3.12.1-macos/bin"; : > "$FIX/.local/share/uv/python/cpython-3.12.1-macos/bin/python"
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+  zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
+grep -qF -- "uv python uninstall cpython-3.12.1-macos" "$STUB_LOG" && [[ -d "$FIX/.local/share/uv/python/cpython-3.12.1-macos" ]] \
+  && ok "--pick typed deletion: uv python uses 'uv python uninstall' (native, not rm)" \
+  || bad "--pick uv dispatch wrong (name derivation or not native)"
+rm -rf "$FIX"
+# (k) typed deletion: android system-image uses 'sdkmanager --uninstall system-images;api;tag;abi'.
+#     This package string is built from 3 levels of path ancestry, the most fragile derivation.
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+print -r -- $'#!/bin/sh\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
+mkdir -p "$FIX/Library/Android/sdk/system-images/android-34/google_apis/arm64-v8a"; : > "$FIX/Library/Android/sdk/system-images/android-34/google_apis/arm64-v8a/x"
+HOME="$FIX" ANDROID_SDK_ROOT="$FIX/Library/Android/sdk" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+  zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
+grep -qF -- "sdkmanager --uninstall system-images;android-34;google_apis;arm64-v8a" "$STUB_LOG" \
+  && ok "--pick typed deletion: android builds the correct 'sdkmanager --uninstall' pkg string" \
+  || bad "--pick android pkg derivation wrong (the 3-level :h/:t ancestry)"
+rm -rf "$FIX"
+# (l) typed deletion: rust uses 'cargo clean --manifest-path <proj>/Cargo.toml' (registered path is
+#     <proj>/target, so the manifest must be one level up).
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+print -r -- $'#!/bin/sh\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
+mkdir -p "$FIX/proj/target/debug"; : > "$FIX/proj/Cargo.toml"; : > "$FIX/proj/target/debug/x"
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+  zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
+grep -qF -- "cargo clean --manifest-path $FIX/proj/Cargo.toml" "$STUB_LOG" && [[ -d "$FIX/proj/target" ]] \
+  && ok "--pick typed deletion: cargo uses 'cargo clean --manifest-path' (native, not rm)" \
+  || bad "--pick cargo manifest derivation wrong"
+rm -rf "$FIX"
+# (m) THE IGNORE-LIST INVARIANT IN THE PICKER: an ignored env must be dropped at registration so it
+#     never enters the picker and is never uninstalled, even when select-all marks everything. (This
+#     is the regression test for the native-uninstaller ignore-bypass found in the 5th audit.)
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+print -r -- $'#!/bin/sh\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
+mkdir -p "$FIX/miniconda3/envs/keepme/lib"; : > "$FIX/miniconda3/envs/keepme/lib/x"
+mkdir -p "$FIX/.cache/dehoard"; print -r -- "$FIX/miniconda3/envs/keepme" > "$FIX/.cache/dehoard/ignore"
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+  zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
+{ ! grep -qF -- "conda env remove -n keepme" "$STUB_LOG" 2>/dev/null } && [[ -d "$FIX/miniconda3/envs/keepme" ]] \
+  && ok "--pick honors the ignore list: an ignored env is dropped pre-picker (native bypass closed)" \
+  || bad "--pick BYPASSED the ignore list: an ignored env was uninstalled!"
+rm -rf "$FIX"
+
+# 5C, --report "Last --apply run" must show the NEWEST log, not the oldest (regression: the glob was
+#      (N.Om) = oldest-first, so [1] was the oldest; fixed to (N.om) = newest-first).
+FIX=$(mktemp -d); mkdir -p "$FIX/.cache/dehoard"
+print -r -- $'4\t/x' > "$FIX/.cache/dehoard/run-20260101-000000.log"
+print -r -- $'9\t/y' > "$FIX/.cache/dehoard/run-20260601-000000.log"
+touch -t 202601010000 "$FIX/.cache/dehoard/run-20260101-000000.log"
+touch -t 202606010000 "$FIX/.cache/dehoard/run-20260601-000000.log"   # newer mtime → should be reported
+rep=$(HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --report 2>/dev/null)
+echo "$rep" | grep -q "Last --apply run: 20260601-000000" \
+  && ok "--report 'Last --apply run' shows the newest log (om glob), not the oldest" \
+  || bad "--report 'Last --apply run' reported the wrong (oldest) log"
+rm -rf "$FIX"
+# 5D, the one sudo Apple-cache rm (bypasses _rm) is SKIPPED when \$BASE is not a /var/folders root.
+#      With TMPDIR=/ → BASE=/ the explicit guard must fire instead of handing "//C/..." to sudo rm.
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+gout=$(HOME="$FIX" TMPDIR=/ PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" zsh "$SCRIPT" --deep --apply --yes 2>&1)
+echo "$gout" | grep -q "skipped system Apple caches" \
+  && ok "--deep: sudo Apple-cache rm is guarded off when \$BASE is not under /var/folders" \
+  || bad "--deep: the sudo Apple-cache \$BASE guard did not fire"
+rm -rf "$FIX"
+
+# 5E, --pick must run ONLY the picker: the excluded sections (macOS junk, IPython, stray .pyc, LaTeX)
+#      must NOT delete inline during the scan, and no internal var may leak to stdout (the _sub=log bug).
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+print -r -- $'#!/bin/sh\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
+mkdir -p "$FIX/proj/node_modules/x"; : > "$FIX/proj/node_modules/x/f"          # registered → picker → deleted
+: > "$FIX/.DS_Store"                                                            # excluded → must SURVIVE
+mkdir -p "$FIX/.ipython/profile_default"; : > "$FIX/.ipython/profile_default/history.sqlite"  # excluded → SURVIVE
+eout=$(HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+  zsh "$SCRIPT" --scan --pick --apply --yes 2>&1)
+[[ ! -d "$FIX/proj/node_modules" && -f "$FIX/.DS_Store" && -f "$FIX/.ipython/profile_default/history.sqlite" ]] \
+  && { ! grep -q '_sub=' <<< "$eout" } \
+  && ok "--pick runs only the picker: excluded sections skip inline deletion + no variable leak" \
+  || bad "--pick deleted an excluded section inline, or leaked a variable to stdout"
+rm -rf "$FIX"
+
+# 5F, the per-category summary: --pick prints a category tally (count + size) before the picker so
+#      users can reason in groups (then type a category + Ctrl-A to take it). fzf=exit 0 → abort.
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+print -r -- $'#!/bin/sh\nexit 0' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
+mkdir -p "$FIX/a/node_modules/x" "$FIX/b/node_modules/y"; : > "$FIX/a/node_modules/x/f"; : > "$FIX/b/node_modules/y/f"
+mkdir -p "$FIX/p1/.venv/bin"; echo "home=/x" > "$FIX/p1/.venv/pyvenv.cfg"
+so=$(HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+  zsh "$SCRIPT" --scan --pick --apply --yes 2>&1)
+{ echo "$so" | grep -q "Reclaimable by category" } && { echo "$so" | grep -qE 'node_modules +2' } \
+  && { echo "$so" | grep -qE 'venv +1' } && [[ -d "$FIX/a/node_modules" && -d "$FIX/p1/.venv" ]] \
+  && ok "--pick prints a per-category summary (counts per category) before the picker" \
+  || bad "--pick category summary missing or has wrong counts"
+rm -rf "$FIX"
+
+# 5G, per-category pickers: --pick opens ONE picker per category (biggest first), not a single combined
+#      list. Assert the per-category headers (▸ <category>) appear and each category deletes its own.
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+print -r -- $'#!/bin/sh\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
+mkdir -p "$FIX/a/node_modules/x"; : > "$FIX/a/node_modules/x/f"
+mkdir -p "$FIX/p1/.venv/bin"; echo "home=/x" > "$FIX/p1/.venv/pyvenv.cfg"
+go=$(HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+  zsh "$SCRIPT" --scan --pick --apply --yes 2>&1)
+{ echo "$go" | grep -q '▸ node_modules' } && { echo "$go" | grep -q '▸ venv' } \
+  && [[ ! -d "$FIX/a/node_modules" && ! -d "$FIX/p1/.venv" ]] \
+  && ok "--pick opens one picker per category (▸ header per category; each deletes its own)" \
+  || bad "--pick did not open per-category pickers / did not delete per category"
+rm -rf "$FIX"
+
+# 5H, freed-space honesty: "Storage freed" must come from dehoard's own deletion tally, not a df delta.
+#      (a) Esc-all (fzf=exit 0) deletes nothing → "Nothing deleted.", never a positive freed figure
+#          (the old df-diff bug reported ambient disk churn even when nothing was removed).
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+print -r -- $'#!/bin/sh\nexit 0' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
+mkdir -p "$FIX/a/node_modules/x"; : > "$FIX/a/node_modules/x/f"
+fh=$(HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+  zsh "$SCRIPT" --scan --pick --apply --yes 2>&1)
+{ echo "$fh" | grep -q 'Nothing deleted' } && { echo "$fh" | grep -qvE 'Storage freed: [1-9]' } \
+  && [[ -d "$FIX/a/node_modules" ]] \
+  && ok "--pick freed-space: deleting nothing reports 'Nothing deleted' (no phantom df reclaim)" \
+  || bad "--pick freed-space reported reclaim despite deleting nothing"
+rm -rf "$FIX"
+#      (b) a real delete reports a freed figure derived from the actual size removed.
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+print -r -- $'#!/bin/sh\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
+mkdir -p "$FIX/a/node_modules/x"; dd if=/dev/zero of="$FIX/a/node_modules/x/blob" bs=1024 count=2048 2>/dev/null
+fr=$(HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+  zsh "$SCRIPT" --scan --pick --apply --yes 2>&1)
+{ echo "$fr" | grep -qE 'Storage freed: [1-9]' } && [[ ! -d "$FIX/a/node_modules" ]] \
+  && ok "--pick freed-space: a real delete reports a freed figure from the actual size removed" \
+  || bad "--pick freed-space did not report the reclaimed size after a real delete"
+rm -rf "$FIX"
+
+# 5I, freed-space honesty in the NON-pick --scan path: native uninstallers (conda/uv/android/cargo)
+#      and ollama bypass _rm, so they must feed the same _FREED_KB tally. A no-fzf `--scan --apply`
+#      that removes a conda env must report the real size, not "Nothing deleted". Regression guard:
+#      the --pick path was fixed first and this twin path was initially missed.
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+mkdir -p "$FIX/miniconda3/envs/bigenv/lib"; dd if=/dev/zero of="$FIX/miniconda3/envs/bigenv/lib/blob" bs=1024 count=2048 2>/dev/null
+fn=$(HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" \
+  zsh "$SCRIPT" --scan --apply --yes 2>&1)
+{ echo "$fn" | grep -qE 'Storage freed: [1-9]' } && grep -q 'conda env remove -n bigenv' "$STUB_LOG" \
+  && ok "freed-space: non-pick --scan native uninstall (conda) feeds the freed tally" \
+  || bad "freed-space: a conda env removed via native uninstaller in non-pick --scan was not counted"
 rm -rf "$FIX"
 
 # 6, syntax

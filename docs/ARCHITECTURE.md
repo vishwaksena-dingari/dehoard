@@ -22,10 +22,12 @@ a few lines, you can understand what the program does before reading a single li
 ```zsh
 main() {
   run_report      # read-only; exits the script if --report/--json
-  clean_tier1     # always-safe caches
-  clean_deep      # Tier 2 (self-guards on $DEEP)
-  clean_models    # self-guards on $MODELS
-  run_scan        # self-guards on $SCAN
+  if ! $PICK; then
+    clean_tier1     # always-safe caches
+    clean_deep      # Tier 2 (self-guards on $DEEP)
+    clean_models    # self-guards on $MODELS
+  fi
+  run_scan        # self-guards on $SCAN; under --pick this is the sole deleter (one fzf picker per category)
   print_result
 }
 main "$@"
@@ -34,20 +36,27 @@ main "$@"
 (That block is the actual dispatch from `dehoard.sh`, verbatim.)
 
 Each cleanup function self-guards on its flag, so the dispatch reads top-to-bottom in execution
-order. The ~470-line `--help` text lives in a single `usage()` heredoc rather than hundreds of
-`echo` statements, so it never buries the logic. Every deletion still routes through the one `_rm`
-primitive (below), the function split changes organization, never the deletion contract.
+order. `--pick` is interactive-only, so `main()` skips the
+batch cleaners and runs only `run_scan`, whose candidates go into one `fzf` picker per category
+(biggest first) instead of the automatic Tier 1 sweep. The ~480-line `--help` text lives in a single `usage()` heredoc rather than hundreds of
+`echo` statements, so it never buries the logic. Every path dehoard removes itself still routes
+through the one `_rm` primitive (below); the function split changes organization, never the deletion
+contract. (The sole delegation is `--scan --pick` handing an environment to its native manager,
+conda/uv/sdkmanager/cargo, with an `_rm` fallback.)
 
 ## The tier model
 
 dehoard's behavior is organized into tiers and modes. Tier 1 always runs; everything else is opt-in
-via a flag. The read-only modes (`--report`, `--json`) are a separate branch that never deletes.
+via a flag. The read-only modes (`--report`, `--json`) are a separate branch that never deletes, and
+`--pick` is interactive-only: it skips the batch tiers and runs only the scan picker.
 
 ```mermaid
 flowchart TD
     Start([dehoard invoked]) --> RO{"--report / --json ?"}
     RO -- yes --> Audit[read-only audit / inventory<br/>deletes nothing] --> End([exit])
-    RO -- no --> T1["Tier 1, always-safe caches<br/>(runs every time)"]
+    RO -- no --> PK{"--pick ?"}
+    PK -- yes --> Pick["scan picker only<br/>(interactive · skips Tier 1/2/models)"] --> Res
+    PK -- no --> T1["Tier 1, always-safe caches<br/>(runs every time)"]
     T1 --> D{"--deep ?"}
     D -- yes --> T2["Tier 2, aggressive caches<br/>(Library caches, Xcode, Docker prune, git gc)"]
     D -- no --> M
@@ -65,10 +74,16 @@ flowchart TD
   manager caches, temp files, Trash). Safe to run anytime.
 - **Tier 2 (`--deep`):** caches with a real but minor cost (a rebuild, a re-download). Library
   caches, Xcode DerivedData, Docker prune, large-repo `git gc`, etc.
-- **`--models`:** interactive removal of LLM/ML weights. Always per-item; weights are user data, so
-  nothing here is ever batch-deleted.
+- **`--models`:** interactive removal of LLM/ML weights, **per tool** (lists a tool's models, then one
+  confirm before clearing that tool's set). Weights are not cheaply regenerable (slow/gated re-download,
+  sometimes irreplaceable), so they are never swept by the other tiers and never enter the `--pick`
+  picker, removal always requires this explicit, opt-in confirmation.
 - **`--scan`:** crawls your project tree for regenerable artifacts (venvs, `node_modules`, build
   dirs), detects orphaned dev/ML tool data, and size-ranks remaining caches.
+- **`--scan --pick`:** the same crawl, but interactive-only. Instead of prompting per item (and
+  instead of the Tier 1 sweep), it `_register`s every candidate and presents them in one `fzf` picker
+  **per category** (biggest first), deleting only what you mark in each. Needs `--apply`; falls back to
+  the per-item prompts when `fzf` is absent.
 
 The exact items in each tier are inventoried in [CLEANS.md](CLEANS.md), and the canonical source is
 `dehoard --help`, which explains every item and why it's safe.
@@ -79,8 +94,9 @@ Whatever requests a delete, it always passes the same gates: the **ignore list**
 **preview→apply** gate, an optional **confirmation** (interactive modes), and the central **`_rm`
 safe-root guard**. That guard and the full run flow are diagrammed in
 [SAFETY.md](SAFETY.md#the-_rm-safe-root-guard) and the [main README](../README.md#how-a-run-works).
-Routing every deletion through one guarded primitive is what lets dozens of independent cleanup
-rules stay safe without each re-implementing the safety checks.
+Routing every path deletion through one guarded primitive is what lets dozens of independent cleanup
+rules stay safe without each re-implementing the safety checks. (The `--scan --pick` picker may hand
+an environment to its native uninstaller instead, which manages its own files and falls back to `_rm`.)
 
 ## Design principles
 
@@ -92,7 +108,10 @@ rules stay safe without each re-implementing the safety checks.
   that don't exist yet.
 - **Report, never auto-delete user data.** Anything that might be data a user cares about (model
   weights, the Docker disk image, orphaned tool data) is reported, not silently removed.
-- **One delete primitive.** All removals go through `_rm` with its safe-root whitelist.
+- **One central delete primitive.** Nearly all path removals go through `_rm` with its safe-root
+  whitelist. A few audited, `--apply`-gated exceptions delete outside it: `--deep`'s root-owned
+  system-cache `sudo rm`, `--models`' LM Studio `find -delete`, and the `--scan --pick` env-manager
+  native uninstallers (with an `_rm` fallback). New code must not add more.
 
 ## Anatomy of a scanner
 
@@ -120,5 +139,27 @@ Checklist for a new scanner:
    name, so the scanner generalizes.
 5. **Add a fixture test** in `test/run.zsh` proving it deletes the cache but keeps adjacent user
    data. The suite is the safety contract; a scanner isn't done until it's covered.
+6. **Support `--pick` if the section deletes per-path.** Guard the per-item loop with
+   `if $_COLLECT; then _register <type> <category> <hint> <note> <paths…>; else <existing loop>; fi`.
+   `_COLLECT` is true only under `--pick` + `fzf` + `--apply`; the registered items surface in the
+   one `_run_picker`. Use `type` `rm` for a plain delete, or `conda`/`uv`/`android`/`cargo` to route
+   through the native uninstaller. Tiny-file noise and user data stay out of the picker.
+
+## Roadmap
+
+Direction for future versions (not yet built):
+
+- **Report-driven, per-model removal.** Today `--models` removes weights *per tool* (clear all of
+  Ollama, wipe the whole HuggingFace cache). The cross-tool duplicate report (see
+  [MODELS.md](MODELS.md)) identifies *individual* redundant copies but has no removal path that acts
+  on them. The planned design: a safe, dedup-guided selector that offers only the provably-redundant
+  copies and **never the last copy of a model**, plus per-model selection for the curated libraries
+  (Ollama, LM Studio). The framework caches (HuggingFace, NLTK, PyTorch hub) stay whole-cache wipes,
+  they regenerate. This would also surface a `last_used` signal so old models are easy to spot.
+- **Recoverability** (`--restore` / opt-in `--quarantine`): every deletion answers "how do I get it
+  back?", by re-creation recipe where possible, by quarantine for the expensive tier.
+
+These carry real deletion risk and earn their own test surface, so they ship after the current
+preview-first foundation, not bundled into it.
 
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for the contribution workflow.

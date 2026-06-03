@@ -17,8 +17,11 @@ FLAGS
   --apply         actually delete (default is preview-only)
   --dry-run       force preview, overrides --apply and DEHOARD_APPLY_DEFAULT
   --yes / -y      auto-confirm every prompt (combine with --apply; use with care)
-  --pick          interactive multiselect of --scan candidates via fzf (implies --scan; needs fzf
-                  installed and --apply; falls back to per-item prompts if fzf is absent)
+  --pick          interactive fzf picker for --scan candidates: ONE picker per category, biggest first
+                  (implies --scan; needs fzf + --apply). Interactive-only: runs JUST the pickers, not
+                  the Tier 1 auto-sweep. In each category: TAB mark, Ctrl-A all, Ctrl-D none, Enter to
+                  confirm, Esc skips that category; the preview shows size/last-modified/recreate/caveat.
+                  Falls back to per-item prompts without fzf; under --dry-run it just previews the list.
   --report        read-only audit; never deletes
   --json          machine-readable model inventory (implies --report; pure JSON on stdout)
                   e.g. dehoard --json | jq '.cross_tool_duplicates'
@@ -31,7 +34,8 @@ Flags combine in any order. Without --apply, every run is a safe preview.
 Recommended: run once to preview, then add --apply. Tier 1 always runs first.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-TIER 1: Runs always. Zero consequences. Safe to run anytime.
+TIER 1: Runs always. Regenerable caches, safe to run anytime (large package-manager
+        caches like Maven/Gradle re-download on the next build).
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   1. Browser update clones
@@ -68,7 +72,7 @@ TIER 1: Runs always. Zero consequences. Safe to run anytime.
      bun pm cache rm             → clears Bun's install cache
      trunk cache prune           → clears Trunk linter/tool cache
      In all cases: your installed packages are NOT removed.
-     Only cached downloads are cleared. Re-installs are slower once.
+     Only cached downloads are cleared; re-installing re-downloads them once.
 
   6. node-gyp cache (~/Library/Caches/node-gyp)
      node-gyp downloads C header files to compile native Node modules.
@@ -126,7 +130,7 @@ TIER 1: Runs always. Zero consequences. Safe to run anytime.
      few minutes into a hidden .ipynb_checkpoints folder. When you
      close the notebook, the checkpoints are never deleted.
      These are NOT your actual notebooks, your .ipynb files are safe.
-     Searched in: ~/Documents, ~/src
+     Searched in: ~ (whole home, to depth 10; node_modules/.venv/.git/.cache/Library pruned)
 
  10. Old installer DMGs in ~/Downloads (>30 days old, >50 MB)
      .dmg files are disk images used to install apps. Once installed,
@@ -245,14 +249,15 @@ TIER 2: Only with --deep. There is a real cost after deletion.
      a new snapshot (happens automatically in ~1 hour).
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-MODELS (--models): Interactive. Shows each item, you decide.
+MODELS (--models): Interactive, per-tool confirmation.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   How it works:
-    Each section lists its contents with individual sizes, then
-    asks 'Delete all? [y/N]'. Type y then Enter to delete, or
-    just Enter (or anything else) to skip. Defaults to No.
-    If run non-interactively (piped/scripted), always skips.
+    Per tool (not per model): each section lists its contents
+    with sizes, then asks once to clear that tool's set, e.g.
+    'Delete all Ollama models? [y/N]'. Type y then Enter to
+    delete, or just Enter (or anything else) to skip. Defaults
+    to No. If run non-interactively (piped/scripted), skips.
 
   1. Ollama models (~/.ollama/models)
      Runs 'ollama list' to show installed models and their sizes.
@@ -443,8 +448,9 @@ SCAN (--scan): Crawls your project tree. Per-entry prompts.
   ── Orphaned dev/ML tool data ── PER ENTRY
      Leftover data dirs of dev/ML tools whose binary/app is gone (e.g.
      ~/.ollama after Ollama is removed). Conservative: only flags tools
-     reliably detectable as absent. For GENERAL app-uninstall leftovers,
-     use Pearcleaner, dehoard does not scan all of ~/Library.
+     reliably detectable as absent. General app-uninstall leftovers are
+     out of scope, a dedicated app uninstaller is the right tool; dehoard
+     does not scan all of ~/Library.
 
   ── Tool caches >100 MB (~/.cache, ~/Library/Caches) ── PER ENTRY
      Generic catch-all. Instead of enumerating every language's cache dir

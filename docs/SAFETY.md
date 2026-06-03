@@ -16,8 +16,10 @@ the single guard that enforces them, and the test suite that proves they hold.
 5. **Your data is never a target.** Model weights, generated outputs, chat/session history, source
    code, git history, and configuration are detected and kept. Only regenerable caches, build
    artifacts, and downloadable assets are eligible for deletion.
-6. **Everything removed is logged.** Under `--apply`, each deleted path and its size is appended to
-   `~/.cache/dehoard/run-<timestamp>.log`.
+6. **Everything `_rm` removes is logged.** Under `--apply`, each path `_rm` deletes and its size is
+   appended to `~/.cache/dehoard/run-<timestamp>.log`. (The few deletions that bypass `_rm`, namely
+   `--deep`'s `sudo` system-cache sweep, `--models`' `ollama rm` / LM Studio cleanup, and interactive
+   `--scan`'s native env-manager uninstallers, are not in this log.)
 
 ### Questions people ask before running a file-deleter
 
@@ -29,18 +31,36 @@ the single guard that enforces them, and the test suite that proves they hold.
 - **Could "duplicate detection" delete a model weight I still need?** No. Duplicate detection is
   **report-only**. It never deletes weights; you remove a redundant copy yourself via `--models`
   after verifying.
+- **Why are model weights treated differently from caches?** Because they are not cheaply
+  regenerable. A cache costs nothing to lose, it rebuilds on next use. A model weight costs a slow,
+  multi-GB re-download (sometimes gated behind a login or license), and a fine-tuned or private weight
+  may be **irreplaceable**. So weights are never swept by Tier 1 / `--deep` / `--scan`, never offered
+  in the `--pick` picker, and never auto-deleted, the duplicate analysis only *reports* them. Removing
+  one is always a deliberate, opt-in `--models` action.
 - **Does it ever delete without asking?** Within `--apply`, the **cache tiers are batch-cleaned with
   no per-item prompt**, both **Tier 1** (always-safe caches) and **Tier 2** (`--deep`, more
   aggressive caches). They touch only regenerable data, so the gate is the global preview→`--apply`
   gate, not a question per file. (This is exactly why `--deep`'s "real cost after deletion" caveat
-  matters: there is no per-item confirmation, so preview it first.) The **interactive modes**
-  (`--models`, `--scan`) are different, they prompt **per item**. In all cases nothing deletes
-  without `--apply`, and any path on your ignore list is skipped and announced.
+  matters: there is no per-item confirmation, so preview it first.) The **interactive modes** are
+  different: `--scan` prompts **per entry** (and `--models` **per tool**, it lists a tool's models then
+  asks once before clearing that tool's set), unless you run `--scan --pick`,
+  which opens one `fzf` picker per category (biggest first; TAB / Ctrl-A to mark) and, per category,
+  reprints the chosen set and asks once. `--pick` is interactive-only (it does not run the Tier 1/Tier 2
+  batch sweeps), an empty selection or Esc skips that category and deletes nothing, and env-manager
+  removals (conda/uv/Android/Rust)
+  are delegated to their native uninstaller (which manages its own files), while every path dehoard
+  removes itself still passes the `_rm` guard below. In all cases nothing deletes without `--apply`,
+  and any path on your ignore list is skipped and announced.
 
 ## The `_rm` safe-root guard
 
-Every deletion in dehoard goes through one function, `_rm`. It is the single chokepoint that makes
-the whitelist impossible to bypass from any individual cleanup rule:
+Nearly every path dehoard removes goes through one function, `_rm`, the central chokepoint that
+applies the whitelist so no individual cleanup rule has to. A few audited deletions delete outside it,
+all `--apply`-gated: `--deep`'s root-owned system-cache sweep (`sudo rm`, which can't run through the
+user-space guard), `--models`' `ollama rm` and LM Studio cleanup (`find -delete`), and interactive
+`--scan` (both the per-entry prompts and `--pick`) handing an environment to its native manager
+(conda/uv/sdkmanager/cargo, falling back to `_rm`), plus a trivial `rmdir` of emptied parent dirs.
+Everything else funnels through the guard below:
 
 ```mermaid
 flowchart TD
@@ -50,7 +70,9 @@ flowchart TD
     B -- yes --> R1[refuse · warn to stderr]
     B -- no --> C{"under $HOME, /var-folders, or /tmp?"}
     C -- no --> R2[refuse path outside safe roots]
-    C -- yes --> D{dry-run / preview?}
+    C -- yes --> IG{"on ignore list?"}
+    IG -- yes --> R3[skip and announce]
+    IG -- no --> D{dry-run / preview?}
     D -- yes --> P["print: would delete (size)"]
     D -- no --> E[append path+size to run log] --> F["rm -rf path"]
 ```
@@ -104,7 +126,12 @@ among other things, that:
 - the destructive external commands (brew/npm/docker) run exactly their documented arguments under
   `--apply`, while a dry-run runs **zero** of them;
 - duplicate detection never miscounts a `Q4≠Q8` or `base≠instruct` variant as a true duplicate;
-- read-only modes (`--report`, `--json`) never write the ignore file and never delete anything.
+- read-only modes (`--report`, `--json`) never write the ignore file and never delete anything;
+- the `--scan --pick` picker deletes only what is marked, an empty/aborted selection deletes nothing
+  even under `--apply --yes`, it never runs the Tier 1 batch sweep, and an env-manager item is removed
+  through its native uninstaller (falling back to `_rm` if that tool is absent);
+- "Storage freed" reflects what was actually deleted: deleting nothing reports zero, a real delete
+  reports the removed size.
 
 If a change breaks any of these, CI fails. That suite is the real safety contract; this page is its
 human-readable summary.

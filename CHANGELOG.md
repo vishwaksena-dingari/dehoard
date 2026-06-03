@@ -3,15 +3,55 @@
 All notable changes to `dehoard` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.2.0]: 2026-06-03
 
 ### Added
-- **`--pick`: interactive multiselect of `--scan` candidates via `fzf`.** Mark what to delete with
-  TAB; dehoard then prints the chosen set back and asks once before removing anything (each path still
-  re-validated through `_rm`). Cancel or an empty selection deletes nothing, so "keep all my logs and
-  `.bak`" is simply leaving them unmarked. Covers the Python venv, `node_modules`, project-log, and
-  backup/swap-file scan sections. `fzf` is optional, not a required dependency: without it, `--pick`
-  falls back to the per-item prompts.
+- **`--pick`: an interactive `fzf` picker per `--scan` category (biggest first).** Instead of a prompt
+  per item, dehoard collects all reclaimable candidates (Python venvs, conda/uv/Android/Rust toolchains,
+  `node_modules`, dist/build, `__pycache__`/egg-info/coverage, JVM heap dumps, ROS2 colcon artifacts,
+  R session files, editor swap/backup, project logs, AI-tool caches, orphaned tool data, and the
+  generic cache sweep) and opens **one picker per category**, biggest category first, prefaced by a
+  **per-category summary** (count + size) as a contents page. In each: **TAB** marks, **Ctrl-A** all,
+  **Ctrl-D** none, Enter confirms, **Esc skips that category**. dehoard reprints the marked set and
+  asks once, then deletes just that category before moving on (so you can stop after the big ones).
+  - **Typed deletion.** Env-managers are removed with their native uninstaller, not raw `rm`
+    (`conda env remove`, `uv python uninstall`, `sdkmanager --uninstall`, `cargo clean`), so they
+    don't leave ghost metadata; everything else goes through `_rm` (safe-root guarded). Ignored paths
+    are dropped at registration, so an "always skip" entry never enters the picker for any type.
+  - **Interactive-only + delete-time only.** `--pick` runs JUST the picker, not the Tier 1 auto-sweep
+    (so it never batch-deletes caches or prompts for sudo behind your back). It needs `--apply`; under
+    `--dry-run` (or without `--apply`) it prints the normal preview list plus a one-line note and never
+    opens the selector. Esc or an empty selection deletes nothing.
+  - `fzf` is optional: without it, `--pick` falls back to the per-item prompts. `--pick` runs ONLY the
+    picker: the non-pickable "noise" categories (`.DS_Store`, stray `.pyc`, LaTeX aux, IPython history)
+    and model weights are skipped under `--pick` with a note pointing to plain `--scan`; they are never
+    deleted inline behind the picker.
+
+### Fixed
+- **`--report` "Last --apply run"** now shows the most recent run; it was sorting the run logs
+  oldest-first and reporting the very first run.
+- **`--deep` system-cache cleanup** now guards the one `sudo rm` to a `/var/folders` root, so a
+  mis-computed `$TMPDIR` can never hand an unexpected path to `sudo rm` (it's skipped with a note).
+- **"Storage freed" now reports what dehoard actually deleted**, not a whole-disk `df` delta. The old
+  figure was `free-space-after - free-space-before`, which credited dehoard for ambient disk activity
+  during the run (it could show a non-zero "freed" even when nothing was deleted). It now sums the
+  size of each path dehoard removes, across every deletion path, the `_rm` primitive, the `--scan`
+  env-manager native uninstallers (conda/uv/Android/Rust, in both the per-entry and `--pick` flows),
+  and `--models` (`ollama rm` via a store-size delta, LM Studio). Deleting nothing reports "Nothing
+  deleted." The `df` value is kept only as separate "Free space now" context.
+
+### Documentation
+- Documented model-weight handling in depth: *why* weights are treated differently from caches (not
+  cheaply regenerable, so never auto-deleted / never in the picker), that duplicate detection is
+  strictly **cross-tool** (two copies inside one tool are not flagged), and that `--models` removes
+  **per tool**, not per model. Corrected docs that called `--models` "per-item". Fixed a
+  `CONTRIBUTING.md` line that wrongly listed model weights among regenerable data dehoard deletes.
+
+Covered by the fixture-`$HOME` test suite (77 assertions), including the picker's abort-safety
+(empty/Esc deletes nothing even under `--apply --yes`), interactive-only behavior, typed deletion for
+all four env-managers (conda/uv/Android/Rust), the ignore list being honored inside the picker,
+safe handling of a TAB-in-path candidate, and the honest freed-space accounting (deleting nothing
+reports zero; a real delete reports the size actually removed).
 
 ## [0.1.1]: 2026-06-02
 
