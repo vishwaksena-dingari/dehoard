@@ -788,6 +788,51 @@ fn=$(HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" \
   || bad "freed-space: a conda env removed via native uninstaller in non-pick --scan was not counted"
 rm -rf "$FIX"
 
+# 5J, DEHOARD_APPLY_DEFAULT is COMPARED, never executed. A non-"true" value must neither run as a
+#      command nor flip APPLY on. (zsh does not word-split, but a bare command name would still run
+#      under the old `${VAR} && APPLY=true`.) A stub named `pwn` touches a sentinel if executed.
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+print -r -- $'#!/bin/sh\ntouch "$PWN_SENTINEL"' > "$STUBDIR/pwn"; chmod +x "$STUBDIR/pwn"
+sent="$FIX/PWNED"
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" PWN_SENTINEL="$sent" DEHOARD_APPLY_DEFAULT=pwn \
+  zsh "$SCRIPT" >/dev/null 2>&1
+[[ ! -e "$sent" ]] \
+  && ok "DEHOARD_APPLY_DEFAULT is compared, not executed (a command-name value never runs)" \
+  || bad "DEHOARD_APPLY_DEFAULT was executed as a command (string-compare regression)"
+rm -rf "$FIX"
+# (b) the legit opt-in still works: =true (no --apply) must enable apply and delete a Tier-1 cache
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+mkdir -p "$FIX/.npm/_npx"; : > "$FIX/.npm/_npx/x"
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_APPLY_DEFAULT=true \
+  zsh "$SCRIPT" --yes >/dev/null 2>&1
+[[ ! -e "$FIX/.npm/_npx/x" ]] \
+  && ok "DEHOARD_APPLY_DEFAULT=true still enables apply (opt-in preserved, not over-corrected)" \
+  || bad "DEHOARD_APPLY_DEFAULT=true no longer enables apply"
+rm -rf "$FIX"
+
+# 5K, LM Studio .gguf deletion now ROUTES THROUGH _rm (was a `find -delete` bypass): it must be
+#      logged to the run log and honor the ignore list. (a) deleted + recorded; (b) ignored survives.
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+mkdir -p "$FIX/.lmstudio/models/pub"; dd if=/dev/zero of="$FIX/.lmstudio/models/pub/m.gguf" bs=1024 count=64 2>/dev/null
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" zsh "$SCRIPT" --models --apply --yes >/dev/null 2>&1
+logf=("$FIX"/.cache/dehoard/run-*.log(N))
+if [[ ! -e "$FIX/.lmstudio/models/pub/m.gguf" ]] && (( ${#logf} )) && grep -q "m.gguf" "${logf[1]}"; then
+  ok "LM Studio .gguf deleted via _rm and recorded in the run log (no longer a bypass)"
+else
+  bad "LM Studio .gguf not routed through _rm (absent from run log) or not deleted"
+fi
+rm -rf "$FIX"
+# (b) an ignore-listed .gguf survives, proving the route is now ignore-aware
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+mkdir -p "$FIX/.lmstudio/models/keep" "$FIX/.lmstudio/models/go" "$FIX/.cache/dehoard"
+: > "$FIX/.lmstudio/models/keep/keep.gguf"; : > "$FIX/.lmstudio/models/go/go.gguf"
+print -r -- "$FIX/.lmstudio/models/keep/*" > "$FIX/.cache/dehoard/ignore"
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" zsh "$SCRIPT" --models --apply --yes >/dev/null 2>&1
+[[ -e "$FIX/.lmstudio/models/keep/keep.gguf" && ! -e "$FIX/.lmstudio/models/go/go.gguf" ]] \
+  && ok "LM Studio .gguf on the ignore list survives (route is ignore-aware now)" \
+  || bad "ignore list NOT honored for LM Studio .gguf (route still bypasses _rm's ignore check)"
+rm -rf "$FIX"
+
 # 6, syntax
 zsh -n "$SCRIPT" && ok "zsh -n syntax clean" || bad "syntax error"
 

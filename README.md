@@ -68,7 +68,7 @@ flowchart TD
 Nearly every candidate goes through the same gates: the ignore list, the preview/apply gate, an
 optional confirmation, and the safe-root guard inside the delete primitive (`_rm`). A few audited
 deletions run outside `_rm`, all still `--apply`-gated: `--deep`'s root-owned system-cache sweep
-(`sudo rm`) and `--models`' LM Studio cleanup (`find -delete`); see [docs/SAFETY.md](docs/SAFETY.md).
+(`sudo rm`) and `--models`' `ollama rm`; see [docs/SAFETY.md](docs/SAFETY.md).
 The read-only modes (`--report`, `--json`) branch off early and never reach a delete.
 
 `--scan --pick` adds an interactive selection layer on top of these gates rather than replacing them:
@@ -84,10 +84,18 @@ still passes the safe-root guard; environment managers (conda/uv/Android/Rust) u
 Preview before you apply.
 
 ```sh
-./dehoard.sh --report      # read-only audit of what's using your disk (start here; deletes nothing)
-./dehoard.sh               # preview the always-safe cleanup (still deletes nothing)
-./dehoard.sh --apply       # reclaim the safe stuff
+./dehoard.sh --report                          # fast map: biggest dirs, reclaimable caches, duplicate models (start here)
+./dehoard.sh --deep --models --scan --dry-run  # exhaustive preview: every item that would be deleted, deletes nothing
+./dehoard.sh --apply                            # reclaim the always-safe Tier 1
+./dehoard.sh --scan --pick --apply              # pick interactively which project artifacts to delete
 ```
+
+Flags combine in any order, and without `--apply` (or with `--dry-run`) any combination only previews.
+`--report` is its own read-only mode: it prints the map and exits, so it does not stack with the
+action-flag preview; run both to see everything (the report for the duplicate-model finder, the
+dry-run combo for the exact per-item delete list). The `--pick` picker covers `--scan` project
+artifacts only: Tier 1 is a safe batch, and model weights are removed solely through `--models`, so
+neither appears in the picker.
 
 ## Install
 
@@ -231,6 +239,7 @@ plain-text file you can edit by hand. Its lifecycle, and the `--list-ignored` / 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): the tier model, run flow, and how to add a new cleanup scanner.
 - [docs/MODELS.md](docs/MODELS.md): where local LLMs live on disk, the duplicate-detection rules, and the `--json` schema.
 - [docs/CLEANS.md](docs/CLEANS.md): the full inventory of what every mode cleans.
+- [docs/PHILOSOPHY.md](docs/PHILOSOPHY.md): the design stance, why trust is the only feature that matters and why the tool stays small on purpose.
 
 ## Contributing
 

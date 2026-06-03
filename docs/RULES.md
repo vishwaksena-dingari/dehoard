@@ -48,8 +48,8 @@ history, and configuration files. Anything non-regenerable is reported, not dele
 4. **Refuse to run as root.** The tool exits rather than touch system-owned files.
 5. **`_rm` is the central delete primitive.** The overwhelming majority of deletions flow through it.
    A few audited, `--apply`-gated exceptions exist: `--deep`'s root-owned system-cache sweep uses
-   `sudo rm` (it can't run through the user-space guard); `--models` uses `ollama rm` and a LM Studio
-   `find -delete`; interactive `--scan` (both the per-entry prompts and `--pick`) delegates env-managers
+   `sudo rm` (it can't run through the user-space guard); `--models` uses `ollama rm`; interactive
+   `--scan` (both the per-entry prompts and `--pick`) delegates env-managers
    (conda/uv/Android/Rust) to their native uninstaller, falling back to `_rm`; plus a trivial `rmdir` of
    emptied parent dirs and removal of dehoard's own ignore file. New code must not add more.
 
@@ -57,7 +57,7 @@ history, and configuration files. Anything non-regenerable is reported, not dele
 
 `_rm` is the central primitive for path deletion: nearly every path dehoard removes flows through it.
 The audited exceptions delete outside it (all `--apply`-gated): `--deep`'s `sudo rm` system-cache
-sweep, `--models`' `ollama rm` and LM Studio `find -delete`, interactive `--scan`'s native env-manager
+sweep, `--models`' `ollama rm`, interactive `--scan`'s native env-manager
 uninstallers (per-entry prompts and `--pick` alike, with an `_rm` fallback), and trivial
 `rmdir`/own-ignore-file cleanup. For everything that does flow through it, `_rm` enforces: 
 

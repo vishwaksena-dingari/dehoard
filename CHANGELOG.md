@@ -3,6 +3,37 @@
 All notable changes to `dehoard` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [0.2.1]: 2026-06-03
+
+### Fixed
+- **LM Studio `.gguf` deletion now routes through `_rm`.** It previously used `find -delete`, which
+  bypassed the safe-root guard, the ignore list, and the deletion log. It now deletes each file
+  through `_rm` (NUL-safe, via process substitution so the freed-space tally is not lost to a
+  subshell), so weight deletion is guarded, ignore-aware, and logged like everything else. This
+  removes one entry from the short list of audited `_rm` exceptions.
+- **`DEHOARD_APPLY_DEFAULT` is now compared, not executed.** The opt-in was written
+  `${DEHOARD_APPLY_DEFAULT:-false} && APPLY=true`, which ran the variable's value as a command. It is
+  now a string comparison (`[[ ... == true ]]`), so a stray value can never execute. `=true` still
+  enables apply; `--dry-run` still overrides.
+- **Backgrounded child is reaped on Ctrl-C in the timeout fallback.** When no `timeout`/`gtimeout`
+  binary is present, `_run_timeout` polls a backgrounded child; a SIGINT/SIGTERM during that wait now
+  kills the child before exiting instead of orphaning it (scoped trap, reverted on return).
+- **Model-weight total is rounded correctly.** The human `--report` "TOTAL local model weights" line
+  used truncating integer math for its one decimal; it now formats with `awk` (the `--json` figure
+  was always exact).
+
+### Changed
+- CI uses `actions/checkout@v5` (Node 24) instead of the deprecated `@v4` (Node 20).
+- README documents the exhaustive read-only preview recipe (`--deep --models --scan --dry-run`), that
+  `--report` is a standalone mode that does not stack with the action-flag preview, and that the
+  `--pick` picker covers `--scan` artifacts only (Tier 1 is a batch; weights go through `--models`).
+  Added docs/PHILOSOPHY.md (design stance) and linked it from the README and docs index.
+
+### Notes
+- Hardening only: no new flags, no behavior change on the normal path. 81 assertions (was 77; added
+  regression tests for the `DEHOARD_APPLY_DEFAULT` comparison and the LM Studio `_rm` routing,
+  including ignore-list coverage).
+
 ## [0.2.0]: 2026-06-03
 
 ### Added

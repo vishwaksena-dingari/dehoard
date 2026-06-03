@@ -110,7 +110,7 @@ an environment to its native uninstaller instead, which manages its own files an
   weights, the Docker disk image, orphaned tool data) is reported, not silently removed.
 - **One central delete primitive.** Nearly all path removals go through `_rm` with its safe-root
   whitelist. A few audited, `--apply`-gated exceptions delete outside it: `--deep`'s root-owned
-  system-cache `sudo rm`, `--models`' LM Studio `find -delete`, and the `--scan --pick` env-manager
+  system-cache `sudo rm`, `--models`' `ollama rm`, and the `--scan --pick` env-manager
   native uninstallers (with an `_rm` fallback). New code must not add more.
 
 ## Anatomy of a scanner

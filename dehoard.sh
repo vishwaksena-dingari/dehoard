@@ -4,7 +4,7 @@
 setopt NULL_GLOB
 
 # Version, keep in sync with the CHANGELOG release heading and the git tag.
-DEHOARD_VERSION="0.2.0"
+DEHOARD_VERSION="0.2.1"
 
 # ─── USER CONFIG ────────────────────────────────────────────────────────────
 # Extra directories to include when scanning for projects (git gc, etc.).
@@ -597,7 +597,7 @@ fi
 
 # SAFETY: preview-by-default. Nothing is deleted unless --apply is given (or
 # DEHOARD_APPLY_DEFAULT=true is set). --dry-run always wins and forces preview.
-${DEHOARD_APPLY_DEFAULT:-false} && APPLY=true   # env opt-in; --dry-run below overrides
+[[ "${DEHOARD_APPLY_DEFAULT:-false}" == true ]] && APPLY=true   # env opt-in (compared, not run); --dry-run below overrides
 $APPLY || DRY_RUN=true
 $DRY_RUN && APPLY=false                          # --dry-run beats everything, always
 
@@ -817,6 +817,10 @@ _run_timeout() {
   done
   "$@" &                       # script runs non-interactively, so no job-control noise
   local pid=$! ticks=0 maxticks=$(( secs * 5 ))   # poll 5x/sec so fast tools return at once
+  # On Ctrl-C/TERM, reap the backgrounded child before exiting so it is not orphaned (the
+  # global trap only knows the parent). local_traps reverts this on return.
+  setopt local_traps
+  trap 'kill -TERM "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; _cleanup_exit' INT TERM
   while (( ticks < maxticks )); do
     kill -0 "$pid" 2>/dev/null || { wait "$pid" 2>/dev/null; return $?; }
     sleep 0.2; (( ticks++ ))
@@ -1096,7 +1100,7 @@ if $REPORT; then
   if (( _mw_total_kb > 0 )); then
     echo "  ────────"
     printf "  %8s  TOTAL local model weights across all tools\n" \
-      "$(( _mw_total_kb / 1024 / 1024 )).$(( (_mw_total_kb / 1024 % 1024) * 10 / 1024 ))G"
+      "$(awk -v k="$_mw_total_kb" 'BEGIN{printf "%.1fG", k/1048576}')"
   else
     echo "  (no local model weights found)"
   fi
@@ -1666,10 +1670,13 @@ if $MODELS; then
           echo "  [dry-run] would delete: $f"
         done
       else
-        # find -delete bypasses _rm, so tally the .gguf total (KB) for honest "Storage freed".
-        local _lms_kb; _lms_kb=$(find ~/.lmstudio/models -name "*.gguf" -exec du -sk {} + 2>/dev/null | awk '{s+=$1} END{print s+0}')
-        find ~/.lmstudio/models -name "*.gguf" -delete 2>/dev/null
-        (( _FREED_KB += ${_lms_kb:-0} ))
+        # Route each .gguf through _rm so deletion is logged, safe-root-guarded, ignore-aware,
+        # and tallied. Process substitution (not a pipe) keeps the loop in the main shell, so
+        # _rm's _FREED_KB increment is not lost to a subshell. NUL-safe for spaced paths.
+        local f
+        while IFS= read -r -d '' f; do
+          _rm "$f"
+        done < <(find ~/.lmstudio/models -name "*.gguf" -print0 2>/dev/null)
         echo "  Done. Re-download models from the LM Studio app."
       fi
     fi

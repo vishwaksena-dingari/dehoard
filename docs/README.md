@@ -11,6 +11,7 @@ Start with the [main README](../README.md) for install and quickstart, then dig 
 | **[ARCHITECTURE.md](ARCHITECTURE.md)** | Why it's one zsh file, the tier model and run flow, and **Anatomy of a scanner**, how to add support for a new tool. |
 | **[MODELS.md](MODELS.md)** | Where local LLMs actually live on a Mac, how cross-tool duplicate detection works, and the `--json` inventory schema. |
 | **[CLEANS.md](CLEANS.md)** | The exhaustive inventory of every item each mode cleans (the long tables kept out of the README). |
+| **[PHILOSOPHY.md](PHILOSOPHY.md)** | The stance behind the tool: why trust is the only feature that matters, why it stays small on purpose, and why it grows by demand. |
 
 > Canonical source of truth for *what gets deleted* is the tool itself: `dehoard --help` (every item
 > with its rationale) and `dehoard --report` (what's actually on your machine). These docs describe

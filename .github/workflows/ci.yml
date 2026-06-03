@@ -11,7 +11,7 @@ jobs:
     # (ShellCheck doesn't support zsh, so we don't run it on dehoard.sh.)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: zsh syntax check
         run: zsh -n dehoard.sh
       - name: behavioral tests (fixture $HOME, proves --apply is safe)
