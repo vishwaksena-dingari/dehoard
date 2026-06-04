@@ -104,8 +104,10 @@ stateDiagram-v2
     Ignored --> Prompted: --unignore path  /  --reset-ignore
 ```
 
-- The ignore file (`~/.cache/dehoard/ignore`) is plain text, one absolute path per line, and you can
-  edit it directly.
+- The ignore file (`~/.config/dehoard/ignore`, honoring `XDG_CONFIG_HOME`) is plain text, one absolute
+  path per line, and you can edit it directly. It is treated as user config: `--uninstall` keeps it,
+  `--purge` removes it. (An ignore file from an older version under `~/.cache/dehoard/` is migrated to
+  this location automatically on the next run.)
 - It is **opt-in**: it only ever exists if you explicitly answer "Always skip?". Nothing is written
   during `--report`, `--dry-run`, or a bare preview.
 - Every skip is **announced** (`⊘ always-skip`), nothing is silently bypassed, and if the list has

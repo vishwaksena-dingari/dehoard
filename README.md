@@ -125,6 +125,8 @@ Requires macOS and zsh (the default shell since Catalina).
 | `dehoard --dry-run` | Force preview even with `--apply` (the safe default, made explicit). |
 | `dehoard --yes` / `-y` | Auto-confirm prompts. Combine with `--apply`; use with care. |
 | `dehoard --list-ignored` / `--unignore <path>` / `--reset-ignore` | Manage the always-skip ignore list. |
+| `dehoard --uninstall` | Remove dehoard: the deletion logs (`~/.cache/dehoard`) and the script. Keeps your ignore list. Preview-first; `--dry-run` to see the plan, `--yes` to skip the prompt. |
+| `dehoard --purge` | Like `--uninstall`, but also removes your ignore list (`~/.config/dehoard`), printing it first. |
 | `dehoard --help` | Full breakdown of every action and why it's safe. |
 | `dehoard --version` / `-V` | Print the version and exit. |
 
@@ -232,6 +234,37 @@ Set via environment variables, for example in `~/.zshrc`:
 The ignore list lets you mark a path "always skip" at the moment you decline a prompt. It's a
 plain-text file you can edit by hand. Its lifecycle, and the `--list-ignored` / `--unignore` /
 `--reset-ignore` flags, are in [docs/SAFETY.md](docs/SAFETY.md#ignore-list).
+
+## Footprint and uninstall
+
+dehoard's entire on-disk footprint is three locations:
+
+- `~/.local/bin/dehoard`, the script itself (placed there by `install.sh`).
+- `~/.cache/dehoard/`, created on `--apply`: one `run-<timestamp>.log` per run (the deletion record).
+  Regenerable; pure exhaust.
+- `~/.config/dehoard/ignore`, created only if you choose "Always skip" at a prompt: your hand-authored
+  list of paths to never touch. This is config, so it is treated as yours.
+
+(Honors `XDG_CACHE_HOME` / `XDG_CONFIG_HOME` if set. Read-only modes and previews write nothing.)
+
+To remove dehoard:
+
+```sh
+dehoard --uninstall            # remove the logs + the script; KEEPS your ignore list
+dehoard --purge                # also remove the ignore list (prints it first)
+dehoard --uninstall --dry-run  # just show the plan
+```
+
+Following the `apt remove` vs `apt purge` convention, `--uninstall` removes the regenerable logs and
+(when you ran the standard `~/.local/bin/dehoard` install) the script, but keeps your ignore list and
+tells you where it is. `--purge` removes that too, echoing it first so the one irreplaceable file is
+never lost silently. A copy run from somewhere else (a cloned repo, a custom path, or a symlink) is
+never deleted; dehoard prints the `rm` command for it instead. The fully manual equivalent:
+
+```sh
+rm ~/.local/bin/dehoard
+rm -rf ~/.cache/dehoard ~/.config/dehoard
+```
 
 ## Documentation
 

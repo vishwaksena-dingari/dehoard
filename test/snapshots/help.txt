@@ -28,6 +28,9 @@ FLAGS
   --list-ignored       show paths you've marked 'always skip'
   --unignore <path>    remove one path from the always-skip list
   --reset-ignore       clear the entire always-skip list and re-prompt everything
+  --uninstall          remove dehoard: the deletion logs (~/.cache/dehoard) and the script. Keeps
+                       your ignore list (~/.config/dehoard); preview-first, --dry-run to see the plan
+  --purge              like --uninstall, but ALSO removes your ignore list (prints it first)
   --version / -V       print version and exit
 
 Flags combine in any order. Without --apply, every run is a safe preview.

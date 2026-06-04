@@ -160,10 +160,10 @@ rm -rf "$FIX"
 
 # 5f, ignore list: path in ignore file is silently skipped; --reset-ignore clears it
 FIX=$(mktemp -d)
-mkdir -p "$FIX/.cache/huggingface" "$FIX/.cache/dehoard"
+mkdir -p "$FIX/.cache/huggingface" "$FIX/.config/dehoard"
 dd if=/dev/zero of="$FIX/.cache/huggingface/x" bs=1024 count=200000 2>/dev/null  # 200 MB
 # Pre-populate ignore list, no trailing slash (matches _ask normalization)
-printf '%s\n' "$FIX/.cache/huggingface" > "$FIX/.cache/dehoard/ignore"
+printf '%s\n' "$FIX/.cache/huggingface" > "$FIX/.config/dehoard/ignore"
 # Dry-run should show ⊘ marker and NOT delete
 dry_out=$(HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --scan --dry-run 2>/dev/null)
 [[ "$dry_out" == *"always-skip"* ]] && ok "ignored path shows ⊘ always-skip in dry-run" \
@@ -175,7 +175,7 @@ after=$(find "$FIX/.cache/huggingface" -type f 2>/dev/null | wc -l | tr -d ' ')
                              || bad "DELETED an always-skipped path!"
 # --reset-ignore clears the file
 HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --reset-ignore >/dev/null 2>&1
-[[ ! -f "$FIX/.cache/dehoard/ignore" ]] && ok "--reset-ignore cleared the ignore file" \
+[[ ! -f "$FIX/.config/dehoard/ignore" ]] && ok "--reset-ignore cleared the ignore file" \
                                          || bad "--reset-ignore did not clear ignore file"
 rm -rf "$FIX"
 
@@ -185,25 +185,25 @@ mkdir -p "$FIX/.cache/test"
 dd if=/dev/zero of="$FIX/.cache/test/x" bs=1024 count=200000 2>/dev/null  # 200 MB
 HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --report >/dev/null 2>&1
 HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" >/dev/null 2>&1  # bare preview
-[[ ! -f "$FIX/.cache/dehoard/ignore" ]] \
+[[ ! -f "$FIX/.config/dehoard/ignore" ]] \
   && ok "--report and bare preview never create ignore file" \
   || bad "--report or bare preview wrote to ignore file (should not)"
 rm -rf "$FIX"
 
 # 5h, --unignore removes one path, leaves others intact; empty file is deleted
 FIX=$(mktemp -d)
-mkdir -p "$FIX/.cache/dehoard"
+mkdir -p "$FIX/.config/dehoard"
 printf '%s\n%s\n' "$FIX/.cache/huggingface" "$FIX/.cache/torch" \
-  > "$FIX/.cache/dehoard/ignore"                                           # two entries
+  > "$FIX/.config/dehoard/ignore"                                           # two entries
 HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --unignore "$FIX/.cache/huggingface" >/dev/null 2>&1
-[[ -f "$FIX/.cache/dehoard/ignore" ]] && \
-  ! grep -qxF "$FIX/.cache/huggingface" "$FIX/.cache/dehoard/ignore" && \
-    grep -qxF "$FIX/.cache/torch" "$FIX/.cache/dehoard/ignore" \
+[[ -f "$FIX/.config/dehoard/ignore" ]] && \
+  ! grep -qxF "$FIX/.cache/huggingface" "$FIX/.config/dehoard/ignore" && \
+    grep -qxF "$FIX/.cache/torch" "$FIX/.config/dehoard/ignore" \
   && ok "--unignore removes one path, keeps the other" \
   || bad "--unignore failed: wrong file state"
 # removing the last entry cleans up the file
 HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --unignore "$FIX/.cache/torch" >/dev/null 2>&1
-[[ ! -f "$FIX/.cache/dehoard/ignore" ]] \
+[[ ! -f "$FIX/.config/dehoard/ignore" ]] \
   && ok "--unignore deletes ignore file when last entry removed" \
   || bad "--unignore left empty ignore file behind"
 rm -rf "$FIX"
@@ -522,8 +522,8 @@ rm -rf "$FIX"
 # 5z, universal ignore list: a path matching an ignore entry (incl. a glob) must survive even in the
 #       batch Tier-1 sweep (not just interactive prompts), and the skip is announced.
 FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
-mkdir -p "$FIX/.cache/dehoard"
-print -r -- "$FIX/Library/Caches/node-*" > "$FIX/.cache/dehoard/ignore"   # a GLOB ignore entry
+mkdir -p "$FIX/.config/dehoard"
+print -r -- "$FIX/Library/Caches/node-*" > "$FIX/.config/dehoard/ignore"   # a GLOB ignore entry
 mkdir -p "$FIX/Library/Caches/node-gyp"; : > "$FIX/Library/Caches/node-gyp/f"   # ignored → must survive
 mkdir -p "$FIX/.cache/node"; : > "$FIX/.cache/node/x"                            # not ignored → deleted
 io=$(HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" zsh "$SCRIPT" --apply --yes 2>&1)
@@ -679,7 +679,7 @@ rm -rf "$FIX"
 FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
 print -r -- $'#!/bin/sh\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
 mkdir -p "$FIX/miniconda3/envs/keepme/lib"; : > "$FIX/miniconda3/envs/keepme/lib/x"
-mkdir -p "$FIX/.cache/dehoard"; print -r -- "$FIX/miniconda3/envs/keepme" > "$FIX/.cache/dehoard/ignore"
+mkdir -p "$FIX/.config/dehoard"; print -r -- "$FIX/miniconda3/envs/keepme" > "$FIX/.config/dehoard/ignore"
 HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
   zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
 { ! grep -qF -- "conda env remove -n keepme" "$STUB_LOG" 2>/dev/null } && [[ -d "$FIX/miniconda3/envs/keepme" ]] \
@@ -693,7 +693,7 @@ FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$
 print -r -- $'#!/bin/sh\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
 mkdir -p "$FIX/keepme/proj/node_modules/x"; : > "$FIX/keepme/proj/node_modules/x/f"   # INSIDE ignored dir
 mkdir -p "$FIX/other/node_modules/x";       : > "$FIX/other/node_modules/x/f"          # not ignored
-mkdir -p "$FIX/.cache/dehoard"; print -r -- "$FIX/keepme" > "$FIX/.cache/dehoard/ignore"
+mkdir -p "$FIX/.config/dehoard"; print -r -- "$FIX/keepme" > "$FIX/.config/dehoard/ignore"
 HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
   zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
 [[ -d "$FIX/keepme/proj/node_modules" && ! -d "$FIX/other/node_modules" ]] \
@@ -851,13 +851,92 @@ fi
 rm -rf "$FIX"
 # (b) an ignore-listed .gguf survives, proving the route is now ignore-aware
 FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
-mkdir -p "$FIX/.lmstudio/models/keep" "$FIX/.lmstudio/models/go" "$FIX/.cache/dehoard"
+mkdir -p "$FIX/.lmstudio/models/keep" "$FIX/.lmstudio/models/go" "$FIX/.config/dehoard"
 : > "$FIX/.lmstudio/models/keep/keep.gguf"; : > "$FIX/.lmstudio/models/go/go.gguf"
-print -r -- "$FIX/.lmstudio/models/keep/*" > "$FIX/.cache/dehoard/ignore"
+print -r -- "$FIX/.lmstudio/models/keep/*" > "$FIX/.config/dehoard/ignore"
 HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" zsh "$SCRIPT" --models --apply --yes >/dev/null 2>&1
 [[ -e "$FIX/.lmstudio/models/keep/keep.gguf" && ! -e "$FIX/.lmstudio/models/go/go.gguf" ]] \
   && ok "LM Studio .gguf on the ignore list survives (route is ignore-aware now)" \
   || bad "ignore list NOT honored for LM Studio .gguf (route still bypasses _rm's ignore check)"
+rm -rf "$FIX"
+
+# 5L, ignore list migrates from the old ~/.cache location to ~/.config (it is config, not cache).
+FIX=$(mktemp -d); mkdir -p "$FIX/.cache/dehoard"; print -r -- "$FIX/keepsafe" > "$FIX/.cache/dehoard/ignore"
+HOME="$FIX" zsh "$SCRIPT" --list-ignored >/dev/null 2>&1
+[[ -f "$FIX/.config/dehoard/ignore" && ! -f "$FIX/.cache/dehoard/ignore" ]] \
+  && grep -qxF "$FIX/keepsafe" "$FIX/.config/dehoard/ignore" \
+  && ok "ignore list migrates from ~/.cache to ~/.config on next run (config, not cache)" \
+  || bad "ignore-list migration to ~/.config failed"
+rm -rf "$FIX"
+
+# 5M, --uninstall (apt-remove semantics): removes logs + script, but KEEPS the user-authored ignore
+# list; --purge also removes it; a non-standard / symlinked script copy is never deleted.
+# (a) non-standard copy KEPT (hint) + logs removed + ignore list KEPT and announced
+FIX=$(mktemp -d)
+mkdir -p "$FIX/.cache/dehoard" "$FIX/.config/dehoard"; : > "$FIX/.cache/dehoard/run-x.log"
+print -r -- "$FIX/keepsafe" > "$FIX/.config/dehoard/ignore"
+uo=$(HOME="$FIX" zsh "$SCRIPT" --uninstall --yes 2>&1)
+{ [[ ! -d "$FIX/.cache/dehoard" && -f "$FIX/.config/dehoard/ignore" && -f "$SCRIPT" ]] \
+  && grep -q "kept your ignore list" <<< "$uo" && grep -q "remove it yourself\|remove it manually" <<< "$uo" } \
+  && ok "--uninstall: logs removed, ignore list KEPT + announced, non-standard script copy kept" \
+  || bad "--uninstall: wrong removal set (should keep ignore list + non-standard script copy)"
+rm -rf "$FIX"
+# (b) --purge ALSO removes the ignore list, echoing its contents first
+FIX=$(mktemp -d)
+mkdir -p "$FIX/.cache/dehoard" "$FIX/.config/dehoard"; : > "$FIX/.cache/dehoard/run-x.log"
+print -r -- "$FIX/keepsafe" > "$FIX/.config/dehoard/ignore"
+po=$(HOME="$FIX" zsh "$SCRIPT" --purge --yes 2>&1)
+{ [[ ! -d "$FIX/.cache/dehoard" && ! -d "$FIX/.config/dehoard" ]] && grep -q "keepsafe" <<< "$po" } \
+  && ok "--purge: removes the ignore list too, after echoing its contents" \
+  || bad "--purge: did not remove the ignore list or did not echo it first"
+rm -rf "$FIX"
+# (c) standard ~/.local/bin install: removes the script + logs, keeps ignore list
+FIX=$(mktemp -d)
+mkdir -p "$FIX/.local/bin" "$FIX/.cache/dehoard" "$FIX/.config/dehoard"; : > "$FIX/.cache/dehoard/run-x.log"
+print -r -- "$FIX/keepsafe" > "$FIX/.config/dehoard/ignore"
+cp "$SCRIPT" "$FIX/.local/bin/dehoard"; chmod +x "$FIX/.local/bin/dehoard"
+HOME="$FIX" zsh "$FIX/.local/bin/dehoard" --uninstall --yes >/dev/null 2>&1
+[[ ! -e "$FIX/.local/bin/dehoard" && ! -d "$FIX/.cache/dehoard" && -f "$FIX/.config/dehoard/ignore" ]] \
+  && ok "--uninstall: standard install removes script + logs, keeps the ignore list" \
+  || bad "--uninstall: standard install removal set wrong"
+rm -rf "$FIX"
+# (d) symlinked install is NOT deleted (rustup lesson): refuse + print manual hint
+FIX=$(mktemp -d)
+mkdir -p "$FIX/.local/bin" "$FIX/realdir" "$FIX/.cache/dehoard"; : > "$FIX/.cache/dehoard/run-x.log"
+cp "$SCRIPT" "$FIX/realdir/dehoard"; chmod +x "$FIX/realdir/dehoard"
+ln -s "$FIX/realdir/dehoard" "$FIX/.local/bin/dehoard"
+so=$(HOME="$FIX" zsh "$FIX/.local/bin/dehoard" --uninstall --yes 2>&1)
+{ [[ -e "$FIX/.local/bin/dehoard" && -f "$FIX/realdir/dehoard" ]] && grep -q "remove it yourself\|remove it manually" <<< "$so" } \
+  && ok "--uninstall: a symlinked install is refused (kept) with a manual hint (rustup lesson)" \
+  || bad "--uninstall: deleted a symlinked install (must refuse and only hint)"
+rm -rf "$FIX"
+# (e) abort (no --yes, no tty) removes NOTHING
+FIX=$(mktemp -d); mkdir -p "$FIX/.cache/dehoard"; : > "$FIX/.cache/dehoard/run-x.log"
+HOME="$FIX" zsh "$SCRIPT" --uninstall >/dev/null 2>&1 < /dev/null
+[[ -d "$FIX/.cache/dehoard" ]] \
+  && ok "--uninstall: declined/non-interactive confirm removes nothing" \
+  || bad "--uninstall: removed data without a yes (must default to keep)"
+rm -rf "$FIX"
+# (f) --uninstall --dry-run previews and deletes nothing
+FIX=$(mktemp -d); mkdir -p "$FIX/.cache/dehoard"; : > "$FIX/.cache/dehoard/run-x.log"
+do=$(HOME="$FIX" zsh "$SCRIPT" --uninstall --dry-run 2>&1)
+{ [[ -d "$FIX/.cache/dehoard" ]] && grep -q "preview" <<< "$do" } \
+  && ok "--uninstall --dry-run previews what it would remove and deletes nothing" \
+  || bad "--uninstall --dry-run deleted something or printed no preview"
+rm -rf "$FIX"
+
+# 5N, XDG edge: if XDG_CACHE_HOME == XDG_CONFIG_HOME the logs and the ignore list share one dir.
+# --uninstall must still KEEP the ignore file (remove only the logs); --purge removes it.
+FIX=$(mktemp -d); SH="$FIX/shared/dehoard"; mkdir -p "$SH"
+: > "$SH/run-x.log"; print -r -- "$FIX/keepsafe" > "$SH/ignore"
+HOME="$FIX" XDG_CACHE_HOME="$FIX/shared" XDG_CONFIG_HOME="$FIX/shared" zsh "$SCRIPT" --uninstall --yes >/dev/null 2>&1
+[[ -f "$SH/ignore" && ! -e "$SH/run-x.log" ]] \
+  && ok "--uninstall (XDG cache==config): keeps the ignore list, removes only the logs" \
+  || bad "--uninstall (XDG cache==config): deleted the ignore list or kept the logs"
+HOME="$FIX" XDG_CACHE_HOME="$FIX/shared" XDG_CONFIG_HOME="$FIX/shared" zsh "$SCRIPT" --purge --yes >/dev/null 2>&1
+[[ ! -f "$SH/ignore" ]] \
+  && ok "--purge (XDG cache==config): removes the shared ignore list too" \
+  || bad "--purge (XDG cache==config): left the ignore list behind"
 rm -rf "$FIX"
 
 # 6, syntax

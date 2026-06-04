@@ -3,6 +3,34 @@
 All notable changes to `dehoard` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [0.2.3]: 2026-06-04
+
+### Added
+- **`--uninstall` and `--purge`: remove dehoard, following the `apt remove` vs `apt purge`
+  convention.** `--uninstall` removes the regenerable deletion logs (`~/.cache/dehoard/`) and, when
+  the running copy is the standard `~/.local/bin/dehoard` install, the script itself; it **keeps your
+  ignore list** and tells you where it is. `--purge` also removes the ignore list, printing its
+  contents first so the one irreplaceable file is never lost silently. Both are preview-first (list
+  exactly what they will remove and keep, then confirm); `--dry-run` shows the plan and deletes
+  nothing, `--yes` skips the prompt. A copy run from a cloned repo, a custom path, or a symlink is
+  never deleted; dehoard prints the manual `rm` for it instead (a symlinked or relocated install could
+  otherwise point at a file you want to keep). Removal targets are fixed paths under `$HOME`, never
+  user-derived.
+
+### Changed
+- **The ignore list moved from `~/.cache/dehoard/ignore` to `~/.config/dehoard/ignore`** (honoring
+  `XDG_CONFIG_HOME`), because it is user-authored config, not regenerable cache. An existing file at
+  the old location is migrated automatically on the next run. Logs stay in `~/.cache/dehoard/`
+  (honoring `XDG_CACHE_HOME`). This is why `--uninstall` can clear the cache freely while preserving
+  config by default.
+
+### Notes
+- The complete on-disk footprint is documented in README "Footprint and uninstall": the script at
+  `~/.local/bin/dehoard`, logs at `~/.cache/dehoard/`, and the ignore list at `~/.config/dehoard/`.
+  92 assertions (was 83; added: ignore-list migration, `--uninstall` keeps config, `--purge` removes
+  it after echoing, standard-install removal, non-standard/symlink-copy preservation, the XDG
+  cache==config collision guard, dry-run/decline safety).
+
 ## [0.2.2]: 2026-06-03
 
 ### Fixed

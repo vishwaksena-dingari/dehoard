@@ -1,8 +1,7 @@
 # Design philosophy
 
-`dehoard` deletes files. That single fact decides almost every design choice in it. This page
-explains the stance behind the tool: why it is shaped the way it is, and why it stays small on
-purpose.
+`dehoard` deletes files, so its design is built around one priority: not deleting the wrong thing.
+This page explains the stance behind the tool, and why it stays small on purpose.
 
 ## Trust is the only feature that matters
 
@@ -37,8 +36,7 @@ So dehoard grows by demand, not by ambition:
   first). Power-user surface like the interactive picker is opt-in, never the default.
 - Recoverability, broader platform support, and richer model management are real ideas, but each is a
   new way to lose or mishandle data, so each waits until it is genuinely needed and arrives with its
-  own tests and a real-machine trial. Restraint is the responsible default for an `rm` tool, not a
-  lack of ideas.
+  own tests and a real-machine trial. Restraint is the responsible default for an `rm` tool.
 
 ## Transparency over authority
 

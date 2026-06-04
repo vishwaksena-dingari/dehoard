@@ -4,7 +4,7 @@
 setopt NULL_GLOB
 
 # Version, keep in sync with the CHANGELOG release heading and the git tag.
-DEHOARD_VERSION="0.2.2"
+DEHOARD_VERSION="0.2.3"
 
 # ─── USER CONFIG ────────────────────────────────────────────────────────────
 # Extra directories to include when scanning for projects (git gc, etc.).
@@ -78,6 +78,9 @@ FLAGS
   --list-ignored       show paths you've marked 'always skip'
   --unignore <path>    remove one path from the always-skip list
   --reset-ignore       clear the entire always-skip list and re-prompt everything
+  --uninstall          remove dehoard: the deletion logs (~/.cache/dehoard) and the script. Keeps
+                       your ignore list (~/.config/dehoard); preview-first, --dry-run to see the plan
+  --purge              like --uninstall, but ALSO removes your ignore list (prints it first)
   --version / -V       print version and exit
 
 Flags combine in any order. Without --apply, every run is a safe preview.
@@ -537,6 +540,20 @@ DEHOARD_HELP
 if [[ "$1" == "--help" || "$1" == "-h" ]]; then usage; exit 0; fi
 if [[ "$1" == "--version" || "$1" == "-V" ]]; then echo "dehoard ${DEHOARD_VERSION}"; exit 0; fi
 
+_SELF="${0:A}"     # absolute, symlink-resolved path of THIS script (captured at top level: inside a
+                   # function zsh's $0 is the function name, so --uninstall could not find it later)
+# Footprint, split by XDG semantics: logs are regenerable cache, the ignore list is user-authored
+# config. Keeping them apart lets --uninstall delete the cache freely while preserving config by
+# default (apt remove vs purge). XDG_* vars are usually unset on macOS, so these default to the
+# familiar ~/.cache and ~/.config.
+_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/dehoard"        # run-*.log deletion records (exhaust)
+_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/dehoard"     # the ignore list (hand-authored intent)
+_IGNORE_FILE="$_CONFIG_DIR/ignore"
+# One-time migration: the ignore list used to live under ~/.cache; it is config, so move it to the
+# config dir. Cheap (two stat checks); transparent; preserves an existing list.
+if [[ -f "$_CACHE_DIR/ignore" && ! -f "$_IGNORE_FILE" ]]; then
+  mkdir -p "$_CONFIG_DIR" 2>/dev/null && mv "$_CACHE_DIR/ignore" "$_IGNORE_FILE" 2>/dev/null
+fi
 DEEP=false
 MODELS=false
 SCAN=false
@@ -557,13 +574,13 @@ for arg in "$@"; do
   [[ "$arg" == "--report" ]]           && REPORT=true
   [[ "$arg" == "--json" ]]             && { JSON=true; REPORT=true; }   # --json implies a read-only report
   if [[ "$arg" == "--reset-ignore" ]]; then
-    rm -f "${HOME}/.cache/dehoard/ignore"
+    rm -f "$_IGNORE_FILE"
     echo "dehoard: ignore list cleared."; exit 0
   fi
   if [[ "$arg" == "--list-ignored" ]]; then
-    local _ign="${HOME}/.cache/dehoard/ignore"
+    local _ign="$_IGNORE_FILE"
     if [[ -f "$_ign" ]]; then
-      echo "Paths in dehoard ignore list (~/.cache/dehoard/ignore):"
+      echo "Paths in dehoard ignore list (${_IGNORE_FILE/#$HOME/~}):"
       sed "s|^${HOME}|~|" "$_ign"
     else
       echo "No ignore list, say 'y' to 'Always skip?' after declining a prompt with --apply."
@@ -582,7 +599,7 @@ if (( ${@[(I)--unignore]} )); then
   fi
   # Normalize: expand leading ~, strip trailing slash, matches how ignore list stores paths
   local _ui_path="${_ui_raw/#\~/$HOME}"; _ui_path="${_ui_path%/}"
-  local _ign="${HOME}/.cache/dehoard/ignore"
+  local _ign="$_IGNORE_FILE"
   if [[ ! -f "$_ign" ]]; then
     echo "dehoard: no ignore list found (nothing to remove)."; exit 0
   fi
@@ -629,7 +646,7 @@ c_bold()   { _c '1'    "$@"; }   # bold     , emphasis / prompts
 c_step()   { if $DRY_RUN; then c_dim "$@"; else c_bold "$@"; fi }
 
 # Warn about unrecognised flags, catches typos like --scann silently running Tier 1 only
-_VALID_FLAGS=(--deep --models --scan --pick --dry-run --apply --yes -y --report --json --help -h --version -V --reset-ignore --list-ignored --unignore)
+_VALID_FLAGS=(--deep --models --scan --pick --dry-run --apply --yes -y --report --json --help -h --version -V --reset-ignore --list-ignored --unignore --uninstall --purge)
 for arg in "$@"; do
   # Only warn about --flag tokens; bare paths (e.g. argument to --unignore) are not flags
   [[ "$arg" == --* || "$arg" == -[a-z] ]] || continue
@@ -653,7 +670,7 @@ if ! $REPORT; then
     $ASSUME_YES && echo "$(c_warn "⚡ --yes: every prompt auto-confirmed (venvs, node_modules, all). Ctrl+C to abort.")"
   fi
   # Surface the active ignore list upfront when the feature is enabled
-  local _ign_startup="${HOME}/.cache/dehoard/ignore"
+  local _ign_startup="$_IGNORE_FILE"
   if ${DEHOARD_IGNORE_ENABLED:-true} && [[ -f "$_ign_startup" ]]; then
     local _ign_n; _ign_n=$(wc -l < "$_ign_startup" | tr -d ' ')
     if (( _ign_n > 0 )); then
@@ -672,7 +689,7 @@ _FREED_KB=0
 # Deletion log (only in --apply mode), a record of what was removed, when.
 LOGFILE=""
 if $APPLY; then
-  LOGDIR="$HOME/.cache/dehoard"
+  LOGDIR="$_CACHE_DIR"
   mkdir -p "$LOGDIR" 2>/dev/null && LOGFILE="$LOGDIR/run-$(date +%Y%m%d-%H%M%S).log"
   [[ -n "$LOGFILE" ]] && echo "# dehoard run $(date), flags: $*" > "$LOGFILE"
 fi
@@ -682,8 +699,8 @@ BASE="$(dirname "$TMPDIR")"   # parent of T/ → gives C/ and X/ siblings
 # Load the ignore list ONCE so _rm honors it in every tier (not just interactive prompts).
 # Non-empty lines only; entries are absolute paths and may contain globs.
 _IGNORE_PATTERNS=()
-if ${DEHOARD_IGNORE_ENABLED:-true} && [[ -f "${HOME}/.cache/dehoard/ignore" ]]; then
-  _IGNORE_PATTERNS=(${(f)"$(grep -v '^[[:space:]]*$' "${HOME}/.cache/dehoard/ignore" 2>/dev/null)"})
+if ${DEHOARD_IGNORE_ENABLED:-true} && [[ -f "$_IGNORE_FILE" ]]; then
+  _IGNORE_PATTERNS=(${(f)"$(grep -v '^[[:space:]]*$' "$_IGNORE_FILE" 2>/dev/null)"})
 fi
 
 # --pick registry: in-scope --scan candidates are appended here during the scan (only under
@@ -697,7 +714,7 @@ _COLLECT=false
 # Priority: --dry-run (show all, delete nothing) → --yes (confirm all) → TTY → skip.
 _ask() {  # $1=question, $2=optional path for always-skip check
   local _sp="${${2:-}%/}"                                      # strip trailing slash for consistent matching
-  local _ign="${HOME}/.cache/dehoard/ignore"
+  local _ign="$_IGNORE_FILE"
   # Check ignore list, always announce the skip so nothing is hidden from the user.
   # Skipped entirely when DEHOARD_IGNORE_ENABLED=false (stateless mode).
   if ${DEHOARD_IGNORE_ENABLED:-true} && [[ -n "$_sp" && -f "$_ign" ]] \
@@ -720,7 +737,7 @@ _ask() {  # $1=question, $2=optional path for always-skip check
     if [[ "$REPLY" != "y" && -n "$_sp" ]] && $APPLY && ${DEHOARD_IGNORE_ENABLED:-true}; then
       read -q "SKIP_REPLY?    Always skip ${_sp/#$HOME/~}? [y/N] "; echo
       if [[ "$SKIP_REPLY" == "y" ]]; then
-        mkdir -p "${HOME}/.cache/dehoard"
+        mkdir -p "$_CONFIG_DIR"
         printf '%s\n' "$_sp" >> "$_ign"
         printf "  ↪ Added to ignore list. Use 'dehoard --reset-ignore' to clear.\n"
       fi
@@ -730,6 +747,101 @@ _ask() {  # $1=question, $2=optional path for always-skip check
     echo "$1 [y/N] → N (non-interactive, skipping)"
     return 1
   fi
+}
+
+# Remove dehoard and everything it ever wrote. The ONLY targets are two fixed, hardcoded paths under
+# $HOME (never user-derived): the cache dir (regenerable logs), and, when the running copy is the
+# standard install, the script itself. Following the apt remove/purge convention, the user-authored
+# ignore list (config) is KEPT by default and announced; --purge also removes it (after echoing it, so
+# the one irreplaceable file is never destroyed silently). A non-standard script copy (a cloned repo
+# or custom path), or a symlinked install, is left alone with a printed manual-removal hint, so we
+# never delete someone's working tree (the rustup self-uninstall data-loss lesson). Preview-first:
+# --dry-run shows the plan and deletes nothing. Not routed through _rm: we delete the log dir itself,
+# so logging into it would be circular, and the targets are fixed strings so the guard adds nothing.
+_uninstall() {
+  # Self-contained on purpose: the global DRY_RUN is forced true whenever --apply is absent, and _ask
+  # auto-confirms under DRY_RUN, so neither can be reused here. Read --dry-run/--purge from our own
+  # args; ASSUME_YES (set at parse, never force-overridden) is still reliable.
+  local _dry=false _purge=false
+  (( ${@[(I)--dry-run]} )) && _dry=true
+  (( ${@[(I)--purge]} ))   && _purge=true
+  local _std="${HOME}/.local/bin/dehoard"
+  local -a _targets=()
+  local _keep_self="" _keep_config=""
+  echo "$(c_head "dehoard uninstall")"
+  echo "  Will remove:"
+  if [[ -d "$_CACHE_DIR" ]]; then
+    echo "    $(du -sh "$_CACHE_DIR" 2>/dev/null | cut -f1)  ${_CACHE_DIR/#$HOME/~}  (deletion logs)"
+    # Normally remove the whole cache dir. But if the user pointed XDG_CACHE_HOME and XDG_CONFIG_HOME
+    # at the same place (or nested config under cache), the ignore file lives in here too: when we are
+    # keeping config (no --purge), remove only the logs so the kept ignore file is not taken with it.
+    if ! $_purge && [[ "${_CONFIG_DIR:A}" == "${_CACHE_DIR:A}" || "${_IGNORE_FILE:A}" == "${_CACHE_DIR:A}/"* ]]; then
+      _targets+=("$_CACHE_DIR"/run-*.log(N))
+    else
+      _targets+=("$_CACHE_DIR")
+    fi
+  else
+    echo "    (no logs at ${_CACHE_DIR/#$HOME/~})"
+  fi
+  # The script: remove only the standard install, and only if it is a real file (not a symlink, which
+  # rustup learned can point into a user's own bin and get followed). :A on both sides resolves the
+  # macOS /var vs /private/var symlink so the comparison is apples-to-apples.
+  if [[ "$_SELF" == "${_std:A}" && -f "$_std" && ! -L "$_std" ]]; then
+    echo "    $(du -sh "$_std" 2>/dev/null | cut -f1)  ${_std/#$HOME/~}  (the script)"
+    _targets+=("$_std")
+  elif [[ -e "$_SELF" ]]; then
+    _keep_self="$_SELF"
+  fi
+  # The ignore list is user-authored config: keep it unless --purge. Under --purge, echo it first so
+  # the only irreplaceable thing dehoard owns is never destroyed without the user seeing it.
+  if [[ -f "$_IGNORE_FILE" ]]; then
+    if $_purge; then
+      echo "    $(du -sh "$_CONFIG_DIR" 2>/dev/null | cut -f1)  ${_CONFIG_DIR/#$HOME/~}  (ignore list, --purge)"
+      _targets+=("$_CONFIG_DIR")
+    else
+      _keep_config="$_IGNORE_FILE"
+    fi
+  fi
+  if [[ -n "$_keep_self" ]]; then
+    echo "  Will KEEP (not the standard ~/.local/bin install, remove it yourself):"
+    echo "    rm '${_keep_self/#$HOME/~}'"
+  fi
+  if [[ -n "$_keep_config" ]]; then
+    echo "  Will KEEP your ignore list (run --purge to remove it too):"
+    echo "    ${_keep_config/#$HOME/~}"
+  fi
+  if (( ! ${#_targets[@]} )); then
+    echo "  Nothing to remove."
+    exit 0
+  fi
+  if $_dry; then
+    echo "  $(c_dim "[preview] nothing removed; re-run without --dry-run to uninstall.")"
+    exit 0
+  fi
+  local _go=false
+  if $ASSUME_YES; then
+    _go=true; echo "  Remove the items above? [y/N] → y (--yes)"
+  elif [[ -t 0 ]]; then
+    read -q "REPLY?$(c_warn "  Remove the items above?") [y/N] "; echo
+    [[ "$REPLY" == "y" ]] && _go=true
+  else
+    echo "  Remove the items above? [y/N] → N (non-interactive; nothing removed; pass --yes to confirm)"
+  fi
+  if $_go; then
+    # Echo the ignore list before purging it: the one irreplaceable file is never lost silently.
+    if $_purge && [[ -f "$_IGNORE_FILE" ]]; then
+      echo "$(c_dim "  ignore list contents (about to be removed by --purge):")"
+      sed 's|^|    |' "$_IGNORE_FILE"
+    fi
+    # Only ever the fixed, hardcoded paths built above (under $HOME, never user-derived).
+    rm -rf "${_targets[@]}"
+    echo "$(c_safe "dehoard uninstalled.")"
+    [[ -n "$_keep_self" ]]   && echo "  (left ${_keep_self/#$HOME/~}, remove it manually)"
+    [[ -n "$_keep_config" ]] && echo "  (kept your ignore list at ${_keep_config/#$HOME/~})"
+  else
+    echo "  Uninstall cancelled, nothing removed."
+  fi
+  exit 0
 }
 
 # Honored by _rm in EVERY tier, not just the interactive _ask prompts, so a path you mark
@@ -1030,7 +1142,7 @@ if $REPORT; then
   # Surface last --apply run from existing deletion logs (zero new state, reads only).
   # Use zsh array glob (not ls glob) so NULL_GLOB expands to empty when no logs exist.
   local _last_log _last_date _last_freed
-  local -a _logs; _logs=(~/.cache/dehoard/run-*.log(N.om))   # N=nullglob, om=mtime newest-first → [1] is newest
+  local -a _logs; _logs=("$_CACHE_DIR"/run-*.log(N.om))   # N=nullglob, om=mtime newest-first → [1] is newest
   if (( ${#_logs} > 0 )); then
     _last_log="${_logs[1]}"
     _last_date=$(basename "$_last_log" .log | sed 's/run-//')
@@ -1301,7 +1413,7 @@ if $REPORT; then
   fi
 
   # Ignore list summary
-  local _ign="${HOME}/.cache/dehoard/ignore"
+  local _ign="$_IGNORE_FILE"
   if [[ -f "$_ign" ]]; then
     local _ign_n; _ign_n=$(wc -l < "$_ign" | tr -d ' ')
     echo ""
@@ -2589,6 +2701,7 @@ fi
 
 # ── Dispatch: run-mode selection (each cleanup function self-guards on its flag) ──
 main() {
+  (( ${@[(I)--uninstall]} || ${@[(I)--purge]} )) && _uninstall "$@"   # --purge implies uninstall; handled first
   run_report      # read-only; exits the script if --report/--json
   # --pick is an INTERACTIVE-ONLY mode: it must not trigger the automatic batch sweeps (Tier 1
   # caches, --deep, --models) or their sudo prompts. The only thing it deletes is what you mark in
