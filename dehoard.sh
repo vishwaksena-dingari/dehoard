@@ -4,7 +4,7 @@
 setopt NULL_GLOB
 
 # Version, keep in sync with the CHANGELOG release heading and the git tag.
-DEHOARD_VERSION="0.2.1"
+DEHOARD_VERSION="0.2.2"
 
 # ─── USER CONFIG ────────────────────────────────────────────────────────────
 # Extra directories to include when scanning for projects (git gc, etc.).
@@ -689,6 +689,7 @@ fi
 # --pick registry: in-scope --scan candidates are appended here during the scan (only under
 # --pick + fzf + --apply) and presented in one fzf picker afterwards. See _register/_run_picker.
 _PICK_ITEMS=()
+typeset -gA _PICK_SEEN     # normalized abs path -> 1, so one path can't appear under two categories
 _COLLECT=false
 
 # ── Shared helpers ──────────────────────────────────────
@@ -738,7 +739,10 @@ _ask() {  # $1=question, $2=optional path for always-skip check
 _is_ignored() {  # $1 = absolute path (trailing slash stripped); true if it matches any ignore entry
   local _p
   for _p in "$_IGNORE_PATTERNS[@]"; do
-    [[ "$1" == ${~_p} ]] && return 0     # ${~_p} activates glob metacharacters in the pattern
+    # Match the entry itself OR anything inside it: "always skip" on a directory must cover the
+    # directory's contents too, otherwise the picker can still offer a child (e.g. an ignored app
+    # dir whose Cache subfolder slips through). ${~_p} activates glob metacharacters in the pattern.
+    [[ "$1" == ${~_p} || "$1" == ${~_p}/* ]] && return 0
   done
   return 1
 }
@@ -872,6 +876,11 @@ _register() {  # $1=type $2=category $3=hint $4=note ; rest = absolute paths
       echo "$(c_dim "  ⊘ ignored: ${_p/#$HOME/~}")"
       continue
     fi
+    # Dedup across categories: a path can be found by more than one scanner (e.g. a big AI-tool
+    # cache also caught by the generic >100MB sweep). Register it once, keyed on the trailing-slash-
+    # normalized abs path, so it is not shown and confirmed twice or double-counted in the summary.
+    if [[ -n "${_PICK_SEEN[${_p%/}]:-}" ]]; then continue; fi
+    _PICK_SEEN[${_p%/}]=1
     _kb=$(du -sk "$_p" 2>/dev/null | cut -f1); [[ -n "$_kb" ]] || _kb=0
     _mt=$(stat -f '%Sm' -t '%Y-%m-%d' "$_p" 2>/dev/null); [[ -n "$_mt" ]] || _mt="-"
     _PICK_ITEMS+=( "${_ty}"$'\t'"${_cat}"$'\t'"${_kb}"$'\t'"${_mt}"$'\t'"${_p/#$HOME/~}"$'\t'"${_hint}"$'\t'"${_note}"$'\t'"${_p}" )

@@ -3,6 +3,26 @@
 All notable changes to `dehoard` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [0.2.2]: 2026-06-03
+
+### Fixed
+- **The ignore list now covers a directory's contents, not just the exact path.** An "always skip"
+  entry on a folder previously matched only that exact path, so the `--pick` picker could still offer
+  a file or subfolder inside it (found on a real machine: an ignored app dir whose `Cache` subfolder
+  was still listed). `_is_ignored` now also matches descendants (`<entry>/*`), so ignoring a directory
+  reliably skips everything under it.
+- **A path found by two scanners is now registered once.** A large cache could be picked up by both a
+  specific tool rule and the generic >100MB sweep (e.g. `~/.cache/codex-runtimes` appeared under both
+  `ai-cache` and `cache`), so it was shown and confirmed twice and inflated the per-category summary.
+  The picker registry now dedups on the normalized absolute path, so each item appears under one
+  category only.
+
+### Notes
+- Hardening only: no new flags, no behavior change on the normal (non-`--pick`) path. Both fixes are
+  fail-safe (no data was at risk; the duplicate delete was already a no-op). 83 assertions (was 81;
+  added regression tests for descendant-ignore coverage and cross-category dedup). Surfaced by real
+  dogfooding of the per-category picker.
+
 ## [0.2.1]: 2026-06-03
 
 ### Fixed

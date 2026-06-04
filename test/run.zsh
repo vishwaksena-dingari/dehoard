@@ -686,6 +686,33 @@ HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER
   && ok "--pick honors the ignore list: an ignored env is dropped pre-picker (native bypass closed)" \
   || bad "--pick BYPASSED the ignore list: an ignored env was uninstalled!"
 rm -rf "$FIX"
+# (k) ignore covers DESCENDANTS: an always-skip on a directory must also drop paths inside it, so the
+#     picker can never offer a child of an ignored dir. Regression for the real-machine find where an
+#     ignored app dir's Cache subfolder was still offered.
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+print -r -- $'#!/bin/sh\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
+mkdir -p "$FIX/keepme/proj/node_modules/x"; : > "$FIX/keepme/proj/node_modules/x/f"   # INSIDE ignored dir
+mkdir -p "$FIX/other/node_modules/x";       : > "$FIX/other/node_modules/x/f"          # not ignored
+mkdir -p "$FIX/.cache/dehoard"; print -r -- "$FIX/keepme" > "$FIX/.cache/dehoard/ignore"
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+  zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
+[[ -d "$FIX/keepme/proj/node_modules" && ! -d "$FIX/other/node_modules" ]] \
+  && ok "--pick: ignore covers a descendant of an ignored dir (child kept, non-ignored sibling deleted)" \
+  || bad "--pick offered/deleted a path INSIDE an ignored directory (ignore must cover descendants)"
+rm -rf "$FIX"
+# (l) dedup across categories: a path found by two scanners (the Codex AI-cache rule AND the generic
+#     >100MB sweep both see ~/.cache/codex-runtimes) is registered ONCE, so it is not shown/confirmed
+#     under a second category. Regression for codex-runtimes appearing in both ai-cache and cache.
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+print -r -- $'#!/bin/sh\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
+mkdir -p "$FIX/.cache/codex-runtimes"
+dd if=/dev/zero of="$FIX/.cache/codex-runtimes/blob" bs=1024 count=120000 2>/dev/null   # >100MB so the generic sweep also catches it
+dd=$(HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+  zsh "$SCRIPT" --scan --pick --apply --yes 2>&1)
+{ [[ ! -d "$FIX/.cache/codex-runtimes" ]] && ! grep -q "▸ cache " <<< "$dd" } \
+  && ok "--pick dedups across categories: a twice-found path is registered once (no duplicate 'cache' category)" \
+  || bad "--pick registered one path under two categories (codex-runtimes in both ai-cache and cache)"
+rm -rf "$FIX"
 
 # 5C, --report "Last --apply run" must show the NEWEST log, not the oldest (regression: the glob was
 #      (N.Om) = oldest-first, so [1] was the oldest; fixed to (N.om) = newest-first).
