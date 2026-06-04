@@ -4,7 +4,7 @@
 setopt NULL_GLOB
 
 # Version, keep in sync with the CHANGELOG release heading and the git tag.
-DEHOARD_VERSION="0.2.4"
+DEHOARD_VERSION="0.2.5"
 
 # ─── USER CONFIG ────────────────────────────────────────────────────────────
 # Extra directories to include when scanning for projects (git gc, etc.).
@@ -342,7 +342,7 @@ SCAN (--scan): Crawls your project tree. Per-entry prompts.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   How it works:
-    Searches ~/Documents, ~/src, ~/Desktop, and ~ for known artifact
+    Searches ~ (your whole home) for known artifact
     patterns. IDE directories (Cursor, VSCode, Trae, Antigravity),
     ~/.cache, ~/Library, and venv internals are excluded so you only
     see your own project files.
@@ -696,6 +696,9 @@ fi
 TMPDIR="${TMPDIR:-/tmp}"      # default if unset (CI/cron/restored sessions), _rm whitelist still guards
 TMPDIR="${TMPDIR%/}/"         # normalize: ensure exactly one trailing slash
 BASE="$(dirname "$TMPDIR")"   # parent of T/ → gives C/ and X/ siblings
+BASE="${BASE:A}"              # canonicalize: resolve `..`/symlinks so a hostile TMPDIR like
+                             # /var/folders/../../etc can't slip the string-prefix guard below and
+                             # steer the sudo rm; a real per-user root resolves under /private/var/folders
 # Load the ignore list ONCE so _rm honors it in every tier (not just interactive prompts).
 # Non-empty lines only; entries are absolute paths and may contain globs.
 _IGNORE_PATTERNS=()
@@ -880,6 +883,12 @@ _rm() {
       echo "$(c_warn "  ⚠️  refusing to delete unsafe path: '${target:-<empty>}'")" >&2
       return 1
     fi
+    # Refuse `..` traversal so the string-prefix whitelist below can't be walked out of a safe root.
+    # Purely additive (only ever deletes LESS); dehoard's real targets come from canonical globs.
+    if [[ "$target" == */../* || "$target" == */.. ]]; then
+      echo "$(c_warn "  ⚠️  refusing path with '..' traversal: '$target'")" >&2
+      return 1
+    fi
     # Safe-root whitelist (centralized, defends against a mis-computed $BASE/$TMPDIR,
     # e.g. TMPDIR unset → BASE='/' → '//C/...'; such paths are NOT under a safe root).
     # Everything dehoard legitimately deletes lives under $HOME or a per-user temp root.
@@ -1020,12 +1029,13 @@ _pick_delete() {  # $1=type $2=abs_path
   case "$_ty" in
     conda)
       _name="${${_p%/}:t}"
-      if command -v conda &>/dev/null && conda env remove -n "$_name" -y 2>>"${LOGFILE:-/dev/null}"; then
+      # A leading-dash name would be read as a flag by the tool; route it to the safe path delete.
+      if [[ "$_name" != -* ]] && command -v conda &>/dev/null && conda env remove -n "$_name" -y 2>>"${LOGFILE:-/dev/null}"; then
         echo "  removed (conda env): $_name"; (( _FREED_KB += _szk ))
       else _rm "$_p"; fi ;;
     uv)
       _name="${${_p%/}:t}"
-      if command -v uv &>/dev/null && uv python uninstall "$_name" 2>>"${LOGFILE:-/dev/null}"; then
+      if [[ "$_name" != -* ]] && command -v uv &>/dev/null && uv python uninstall "$_name" 2>>"${LOGFILE:-/dev/null}"; then
         echo "  removed (uv python): $_name"; (( _FREED_KB += _szk ))
       else _rm "$_p"; fi ;;
     android)
@@ -1245,6 +1255,16 @@ if $REPORT; then
     local s="${1:-}"
     s=${s//\\/\\\\}; s=${s//\"/\\\"}            # backslash FIRST, then quote
     s=${s//$'\n'/\\n}; s=${s//$'\t'/\\t}; s=${s//$'\r'/\\r}
+    # Escape any remaining control char (U+0000-U+001F) to \u00XX so a hostile name stays valid JSON.
+    local c rest="$s"; s=""
+    while [[ -n "$rest" ]]; do
+      c="${rest[1]}"; rest="${rest[2,-1]}"
+      if [[ "$c" == [$'\x01'-$'\x1f'] ]]; then
+        s+=$(printf '\\u%04x' "$(( #c ))")
+      else
+        s+="$c"
+      fi
+    done
     printf '"%s"' "$s"
   }
   _json_str_or_null() {  # $1 → JSON string, but empty or "?" → null (queryable unknown)
@@ -1964,7 +1984,7 @@ if $SCAN; then
         else
           # Count toward the honest "Storage freed" tally only on a real native removal; the _rm
           # fallback counts itself, so guard to the success branch to avoid double-counting.
-          if conda env remove -n "$env_name" -y 2>/dev/null; then (( _FREED_KB += size_kb )); else _rm "$d"; fi
+          if [[ "$env_name" != -* ]] && conda env remove -n "$env_name" -y 2>/dev/null; then (( _FREED_KB += size_kb )); else _rm "$d"; fi   # dash-leading name → safe path delete
           echo "         Deleted. Recreate: conda create -n $env_name python=3.x"
         fi
         CONDA_TOTAL_KB=$(( CONDA_TOTAL_KB + size_kb ))
@@ -1993,7 +2013,7 @@ if $SCAN; then
           echo "  [dry-run] would run: uv python uninstall $py_name"
         elif command -v uv &>/dev/null; then
           # Count freed space only on a real native uninstall; _rm fallback counts itself.
-          if uv python uninstall "$py_name" 2>/dev/null; then (( _FREED_KB += size_kb )); else _rm "$d"; fi
+          if [[ "$py_name" != -* ]] && uv python uninstall "$py_name" 2>/dev/null; then (( _FREED_KB += size_kb )); else _rm "$d"; fi   # dash-leading name → safe path delete
           echo "         Uninstalled. Reinstall: uv python install $py_name"
         else
           _rm "$d"

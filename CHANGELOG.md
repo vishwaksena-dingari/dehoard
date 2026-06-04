@@ -3,6 +3,32 @@
 All notable changes to `dehoard` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [0.2.5]: 2026-06-04
+
+### Security
+- **The one `sudo rm` (the `--deep` system-cache sweep) now canonicalizes its base path before the
+  `/var/folders` guard.** Previously the guard was a plain string-prefix check, so a hostile
+  `TMPDIR` like `/var/folders/../../etc/T/` could pass it yet resolve elsewhere. `$BASE` is now
+  resolved with `:A` first, so a `..`-laced or symlinked `TMPDIR` that points outside a per-user temp
+  root is refused. (Needs attacker-controlled environment plus `--deep --apply`; defensive hardening.)
+- **`_rm` refuses any target containing a `..` traversal segment.** Defense-in-depth: the safe-root
+  whitelist is a prefix match, so this closes a theoretical walk-out (not reachable by normal scans,
+  which produce already-canonical paths). Purely subtractive: it can only ever delete less.
+- **The env-manager uninstallers reject a discovered name that begins with `-`.** A directory named
+  like `--foo` is removed via the safe path delete instead of being passed to `conda`/`uv` as a flag
+  (no shell injection was possible; this prevents argument confusion).
+- **`--json` escapes control characters.** Names containing bytes U+0000-U+001F are now emitted as
+  `\u00XX`, so a model or directory name with a control character stays valid JSON.
+
+### Fixed
+- The `--scan` help line listed `~/Documents, ~/src, ~/Desktop, and ~`; the scan actually crawls `~`
+  (the whole home). Reworded to say so.
+
+### Notes
+- Hardening only, from a security-focused audit pass; no behavior change on the normal path, no new
+  flags. 102 assertions (was 98; added the sudo-guard escape, the dash-name uninstaller guard, the
+  control-character JSON case, and the `_rm` traversal refusal).
+
 ## [0.2.4]: 2026-06-04
 
 ### Fixed

@@ -979,6 +979,55 @@ grep -q "Last --apply run" <<< "$ro" \
   || bad "--report missed logs under XDG_CACHE_HOME (glob still hardcoded ~/.cache)"
 rm -rf "$FIX"
 
+# 5P, security hardening (v0.2.5).
+# (a) #1 the sudo Apple-cache rm must refuse a `..`-laced TMPDIR that resolves OUTSIDE /var/folders
+#     (canonicalized BASE). The guard must fire on the resolved path, not the literal prefix.
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+ev=$(HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" TMPDIR="/var/folders/../../etc/T/" \
+  zsh "$SCRIPT" --deep --apply --yes 2>&1)
+{ ! grep -qE 'rm .*-rf .*/etc/' "$STUB_LOG" 2>/dev/null && ! grep -qE 'sudo .*etc' "$STUB_LOG" 2>/dev/null } \
+  && ok "#1 sudo guard: a '..'-laced TMPDIR resolving outside /var/folders is refused (no sudo rm of /etc)" \
+  || bad "#1 sudo guard: a '..' TMPDIR escaped the guard and reached sudo rm outside /var/folders"
+rm -rf "$FIX"
+# (b) #2 a discovered conda env named with a leading dash is NOT passed to the native uninstaller as a
+#     flag; it is removed via the safe path delete instead. A normal sibling still goes native.
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
+print -r -- $'#!/bin/sh\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
+mkdir -p "$FIX/miniconda3/envs/--evil/lib"; : > "$FIX/miniconda3/envs/--evil/lib/x"
+mkdir -p "$FIX/miniconda3/envs/good/lib";   : > "$FIX/miniconda3/envs/good/lib/x"
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+  zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
+{ ! grep -qF -- "conda env remove -n --evil" "$STUB_LOG" 2>/dev/null && [[ ! -d "$FIX/miniconda3/envs/--evil" ]] \
+  && grep -qF -- "conda env remove -n good" "$STUB_LOG" 2>/dev/null } \
+  && ok "#2 dash-leading env name is path-deleted, never passed as a flag; normal sibling goes native" \
+  || bad "#2 a dash-leading conda env name reached the native uninstaller (argument-injection guard missing)"
+rm -rf "$FIX"
+# (c) #3 a model/dir name with a control char still yields valid JSON
+if command -v python3 >/dev/null 2>&1; then
+  FIX=$(mktemp -d); bell=$(printf 'm\ax')          # BEL inside the name
+  mkdir -p "$FIX/.ollama/models/manifests/registry.ollama.ai/library/$bell/7b" 2>/dev/null
+  : > "$FIX/.ollama/models/manifests/registry.ollama.ai/library/$bell/7b/x" 2>/dev/null
+  oj=$(HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --json 2>/dev/null)
+  print -r -- "$oj" | python3 -m json.tool >/dev/null 2>&1 \
+    && ok "#3 --json stays valid JSON when a model name contains a control character" \
+    || bad "#3 --json broke (invalid JSON) on a control character in a name"
+  rm -rf "$FIX"
+else
+  ok "(skipped #3 control-char JSON test: python3 unavailable)"
+fi
+# (d) #4 _rm refuses a target containing '..' traversal (defense-in-depth; extraction unit test)
+FIX=$(mktemp -d); mkdir -p "$FIX/sub"; echo data > "$FIX/sub/victim"
+out=$(HOME="$FIX" PATH="$SAFE_PATH" zsh -c '
+  DRY_RUN=false; LOGFILE=""
+  c_warn(){ printf "%s" "$*"; }; c_dim(){ printf "%s" "$*"; }
+  '"$(sed -n "/^_rm() {/,/^}/p" "$SCRIPT")"'
+  _rm "'"$FIX"'/sub/../sub/victim" 2>&1; echo "rc=$?"
+')
+[[ "$out" == *"traversal"* && "$out" == *"rc=1"* && -f "$FIX/sub/victim" ]] \
+  && ok "#4 _rm refuses a '..'-traversal target (victim survives)" \
+  || bad "#4 _rm did NOT refuse a '..' target: [$out]"
+rm -rf "$FIX"
+
 # 6, syntax
 zsh -n "$SCRIPT" && ok "zsh -n syntax clean" || bad "syntax error"
 

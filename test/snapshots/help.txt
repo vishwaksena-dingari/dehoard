@@ -292,7 +292,7 @@ SCAN (--scan): Crawls your project tree. Per-entry prompts.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   How it works:
-    Searches ~/Documents, ~/src, ~/Desktop, and ~ for known artifact
+    Searches ~ (your whole home) for known artifact
     patterns. IDE directories (Cursor, VSCode, Trae, Antigravity),
     ~/.cache, ~/Library, and venv internals are excluded so you only
     see your own project files.
