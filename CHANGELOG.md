@@ -3,6 +3,25 @@
 All notable changes to `dehoard` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [0.2.6]: 2026-06-04
+
+### Fixed
+- **Runs under zsh defaults regardless of your `~/.zshenv`.** `~/.zshenv` is sourced for every `zsh`
+  invocation, so a global `setopt KSH_ARRAYS` or `SH_WORD_SPLIT` previously leaked in and could make
+  `--json` emit invalid output (with exit 0) or silently skip a project whose path contains a space.
+  dehoard now calls `emulate zsh` at startup (then re-applies its one required option, `NULL_GLOB`),
+  so output and globbing are deterministic no matter how your shell is configured. No change to normal
+  runs; the safe-root guard already prevented any wrong deletion in these cases.
+
+### Docs
+- `docs/ARCHITECTURE.md` showed the `main()` dispatch and called it "verbatim" while omitting the
+  first line (the `--uninstall`/`--purge` dispatch); the shown block now includes it.
+
+### Notes
+- Hardening + doc accuracy; no behavior change on a normally-configured shell, no new flags. 104
+  assertions (was 102; added a hostile-`.zshenv` regression: `--json` stays valid and a space-path
+  project is still detected under `KSH_ARRAYS`/`SH_WORD_SPLIT`).
+
 ## [0.2.5]: 2026-06-04
 
 ### Security

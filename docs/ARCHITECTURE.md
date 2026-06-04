@@ -21,6 +21,7 @@ a few lines, you can understand what the program does before reading a single li
 
 ```zsh
 main() {
+  (( ${@[(I)--uninstall]} || ${@[(I)--purge]} )) && _uninstall "$@"   # --purge implies uninstall; handled first
   run_report      # read-only; exits the script if --report/--json
   if ! $PICK; then
     clean_tier1     # always-safe caches
@@ -33,7 +34,7 @@ main() {
 main "$@"
 ```
 
-(That block is the actual dispatch from `dehoard.sh`, verbatim.)
+(That block is the actual dispatch from `dehoard.sh`, lightly trimmed of inline comments.)
 
 Each cleanup function self-guards on its flag, so the dispatch reads top-to-bottom in execution
 order. `--pick` is interactive-only, so `main()` skips the

@@ -1028,6 +1028,33 @@ out=$(HOME="$FIX" PATH="$SAFE_PATH" zsh -c '
   || bad "#4 _rm did NOT refuse a '..' target: [$out]"
 rm -rf "$FIX"
 
+# 5Q, shell-env hardening (v0.2.6): a hostile ~/.zshenv (KSH_ARRAYS / SH_WORD_SPLIT) must NOT corrupt
+# output or silently skip paths, because dehoard runs `emulate zsh`. ZDOTDIR points zsh at a fixture
+# .zshenv so we never touch the real one.
+# (a) KSH_ARRAYS in .zshenv: --json must stay valid JSON (array indexing in the emit can't break).
+if command -v python3 >/dev/null 2>&1; then
+  FIX=$(mktemp -d); mkdir -p "$FIX/zdot"
+  print -r -- 'setopt ksh_arrays sh_word_split' > "$FIX/zdot/.zshenv"
+  mkdir -p "$FIX/.ollama/models/manifests/registry.ollama.ai/library/llama3/8b"
+  : > "$FIX/.ollama/models/manifests/registry.ollama.ai/library/llama3/8b/x"
+  zj=$(HOME="$FIX" ZDOTDIR="$FIX/zdot" PATH="$SAFE_PATH" zsh "$SCRIPT" --json 2>/dev/null)
+  print -r -- "$zj" | python3 -m json.tool >/dev/null 2>&1 \
+    && ok "shell-env: --json stays valid JSON even with KSH_ARRAYS/SH_WORD_SPLIT set in .zshenv" \
+    || bad "shell-env: a hostile .zshenv corrupted --json (emulate guard missing/ineffective)"
+  rm -rf "$FIX"
+else
+  ok "(skipped shell-env JSON test: python3 unavailable)"
+fi
+# (b) SH_WORD_SPLIT in .zshenv: a space-in-path project is still detected (not word-split + skipped).
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; make_stubs "$STUBDIR"; mkdir -p "$FIX/zdot"
+print -r -- 'setopt ksh_arrays sh_word_split' > "$FIX/zdot/.zshenv"
+mkdir -p "$FIX/my proj/node_modules/x"; : > "$FIX/my proj/node_modules/x/f"
+so=$(HOME="$FIX" ZDOTDIR="$FIX/zdot" PATH="$STUBDIR:$SAFE_PATH" zsh "$SCRIPT" --scan --dry-run 2>&1)
+grep -qF "my proj/node_modules" <<< "$so" \
+  && ok "shell-env: a space-in-path project is still detected under SH_WORD_SPLIT (emulate guard holds)" \
+  || bad "shell-env: SH_WORD_SPLIT caused a space-path project to be silently skipped"
+rm -rf "$FIX"
+
 # 6, syntax
 zsh -n "$SCRIPT" && ok "zsh -n syntax clean" || bad "syntax error"
 

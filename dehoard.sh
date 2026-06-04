@@ -1,10 +1,15 @@
 #!/usr/bin/env zsh
 # dehoard: disk reclaimer for ML/dev Macs (zsh, macOS). https://github.com/vishwaksena-dingari/dehoard
-# Unmatched globs expand to nothing instead of erroring (e.g. empty Trash, no screenshots)
+# Run under zsh defaults regardless of the user's ~/.zshenv (which IS sourced for `zsh dehoard.sh`).
+# This neutralizes options a user may have set globally (KSH_ARRAYS, SH_WORD_SPLIT, ...) that would
+# otherwise corrupt array indexing / globbing and silently produce invalid --json or skip space-paths.
+emulate zsh
+# Unmatched globs expand to nothing instead of erroring (e.g. empty Trash, no screenshots).
+# The one non-default option dehoard relies on, re-applied after `emulate` resets options.
 setopt NULL_GLOB
 
 # Version, keep in sync with the CHANGELOG release heading and the git tag.
-DEHOARD_VERSION="0.2.5"
+DEHOARD_VERSION="0.2.6"
 
 # ─── USER CONFIG ────────────────────────────────────────────────────────────
 # Extra directories to include when scanning for projects (git gc, etc.).
