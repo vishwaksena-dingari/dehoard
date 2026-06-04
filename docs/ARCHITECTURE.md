@@ -110,8 +110,10 @@ an environment to its native uninstaller instead, which manages its own files an
   weights, the Docker disk image, orphaned tool data) is reported, not silently removed.
 - **One central delete primitive.** Nearly all path removals go through `_rm` with its safe-root
   whitelist. A few audited, `--apply`-gated exceptions delete outside it: `--deep`'s root-owned
-  system-cache `sudo rm`, `--models`' `ollama rm`, and the `--scan --pick` env-manager
-  native uninstallers (with an `_rm` fallback). New code must not add more.
+  system-cache `sudo rm`, `--models`' `ollama rm`, the `--scan --pick` env-manager native uninstallers
+  (with an `_rm` fallback), and `--uninstall`/`--purge` removing dehoard's own footprint (fixed
+  `$HOME`-relative paths). New code must not add a deleter of user cleanup paths outside `_rm`; these
+  are the exhaustive set.
 
 ## Anatomy of a scanner
 

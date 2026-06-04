@@ -51,15 +51,21 @@ history, and configuration files. Anything non-regenerable is reported, not dele
    `sudo rm` (it can't run through the user-space guard); `--models` uses `ollama rm`; interactive
    `--scan` (both the per-entry prompts and `--pick`) delegates env-managers
    (conda/uv/Android/Rust) to their native uninstaller, falling back to `_rm`; plus a trivial `rmdir` of
-   emptied parent dirs and removal of dehoard's own ignore file. New code must not add more.
+   emptied parent dirs and removal of dehoard's own ignore file. `--uninstall`/`--purge` removes
+   dehoard's own footprint (a fixed set of `$HOME`-relative paths: the logs dir, the config dir, the
+   standard script) with a plain `rm -rf` behind its own preview and confirm; it is the one sanctioned
+   exception that deletes the tool itself rather than a cleanup candidate. New code must not add a deleter
+   of user cleanup paths outside `_rm`, and these are the exhaustive list.
 
 ## The `_rm` contract
 
 `_rm` is the central primitive for path deletion: nearly every path dehoard removes flows through it.
 The audited exceptions delete outside it (all `--apply`-gated): `--deep`'s `sudo rm` system-cache
 sweep, `--models`' `ollama rm`, interactive `--scan`'s native env-manager
-uninstallers (per-entry prompts and `--pick` alike, with an `_rm` fallback), and trivial
-`rmdir`/own-ignore-file cleanup. For everything that does flow through it, `_rm` enforces: 
+uninstallers (per-entry prompts and `--pick` alike, with an `_rm` fallback), trivial
+`rmdir`/own-ignore-file cleanup, and `--uninstall`/`--purge`'s `rm -rf` of dehoard's own footprint
+(fixed `$HOME`-relative paths, behind its own preview and confirm). For everything that does flow
+through it, `_rm` enforces: 
 
 - **Fail-closed.** If the dry-run safety flag is unset, `_rm` refuses and deletes nothing, rather
   than risk deleting in what the user believes is preview.
@@ -128,8 +134,9 @@ by an assisted tool, stays inside the safety envelope above.
 - A proposed cleanup is **data, not code**: a label, a set of clean-globs, and a set of keep-globs,
   in the `_ai_clean` shape. It is not freeform shell, and it never introduces a new delete call.
 - Every **newly proposed** cleanup deletes through `_rm` and inherits the safe-root whitelist. A
-  proposal cannot widen that whitelist or introduce its own delete call (the few existing non-`_rm`
-  deleters listed in the `_rm` contract are grandfathered and audited; no new ones are added).
+  cleanup proposal cannot widen that whitelist or introduce its own delete call; the non-`_rm` deleters
+  listed in the `_rm` contract are the exhaustive audited set, and a cleanup never adds to it. (Those
+  exceptions remove system caches or dehoard's own footprint, never a user cleanup candidate.)
 - Output is **preview-first** and merged by a human. The proposing tool does not execute deletions.
 - A proposal is **refused** when it would: target non-regenerable user data; reach a path outside
   the safe roots; require a raw `rm` or any delete outside `_rm`; or require a hardcoded personal

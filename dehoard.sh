@@ -4,7 +4,7 @@
 setopt NULL_GLOB
 
 # Version, keep in sync with the CHANGELOG release heading and the git tag.
-DEHOARD_VERSION="0.2.3"
+DEHOARD_VERSION="0.2.4"
 
 # ─── USER CONFIG ────────────────────────────────────────────────────────────
 # Extra directories to include when scanning for projects (git gc, etc.).
@@ -771,13 +771,15 @@ _uninstall() {
   echo "$(c_head "dehoard uninstall")"
   echo "  Will remove:"
   if [[ -d "$_CACHE_DIR" ]]; then
-    echo "    $(du -sh "$_CACHE_DIR" 2>/dev/null | cut -f1)  ${_CACHE_DIR/#$HOME/~}  (deletion logs)"
     # Normally remove the whole cache dir. But if the user pointed XDG_CACHE_HOME and XDG_CONFIG_HOME
     # at the same place (or nested config under cache), the ignore file lives in here too: when we are
     # keeping config (no --purge), remove only the logs so the kept ignore file is not taken with it.
+    # Decide BEFORE the preview line so the "Will remove:" text matches what is actually deleted.
     if ! $_purge && [[ "${_CONFIG_DIR:A}" == "${_CACHE_DIR:A}" || "${_IGNORE_FILE:A}" == "${_CACHE_DIR:A}/"* ]]; then
+      echo "    ${_CACHE_DIR/#$HOME/~}/run-*.log  (deletion logs; the ignore list in this dir is kept)"
       _targets+=("$_CACHE_DIR"/run-*.log(N))
     else
+      echo "    $(du -sh "$_CACHE_DIR" 2>/dev/null | cut -f1)  ${_CACHE_DIR/#$HOME/~}  (deletion logs)"
       _targets+=("$_CACHE_DIR")
     fi
   else
@@ -1259,8 +1261,8 @@ if $REPORT; then
     s="${s//[^a-z0-9.]/ }"
     for k in tinyllama codellama llama mixtral mistral qwen3 qwq qwen gemma phi4 phi3 phi deepseek \
              granite olmo smollm nemotron exaone minicpm internlm glm kimi mpt \
-             vicuna falcon gptoss gpt2 yi command-r stablelm starcoder whisper clip sdxl stable bert; do
-      [[ " $s " == *" $k"* || " $s " == *"$k"* ]] && { fam="$k"; break; }
+             vicuna falcon gptoss gpt2 yi "command r" stablelm starcoder whisper clip sdxl stable bert; do
+      [[ " $s " == *" $k"* || " $s " == *"$k"* ]] && { fam="${k// /}"; break; }   # strip the space in multi-word tokens (e.g. "command r" → key "commandr")
     done
     params=$(print -r -- "$s" | grep -oiE '[0-9]+(\.[0-9]+)?b' | head -1)
     print -r -- "${fam:-${s%% *}}-${params:-x}"

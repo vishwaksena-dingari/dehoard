@@ -18,8 +18,9 @@ the single guard that enforces them, and the test suite that proves they hold.
    artifacts, and downloadable assets are eligible for deletion.
 6. **Everything `_rm` removes is logged.** Under `--apply`, each path `_rm` deletes and its size is
    appended to `~/.cache/dehoard/run-<timestamp>.log`. (The few deletions that bypass `_rm`, namely
-   `--deep`'s `sudo` system-cache sweep, `--models`' `ollama rm`, and interactive `--scan`'s native
-   env-manager uninstallers, are not in this log.)
+   `--deep`'s `sudo` system-cache sweep, `--models`' `ollama rm`, interactive `--scan`'s native
+   env-manager uninstallers, and `--uninstall`/`--purge` removing dehoard's own footprint, are not in
+   this log.)
 
 ### Questions people ask before running a file-deleter
 
@@ -57,10 +58,11 @@ the single guard that enforces them, and the test suite that proves they hold.
 Nearly every path dehoard removes goes through one function, `_rm`, the central chokepoint that
 applies the whitelist so no individual cleanup rule has to. A few audited deletions delete outside it,
 all `--apply`-gated: `--deep`'s root-owned system-cache sweep (`sudo rm`, which can't run through the
-user-space guard), `--models`' `ollama rm`, and interactive
+user-space guard), `--models`' `ollama rm`, interactive
 `--scan` (both the per-entry prompts and `--pick`) handing an environment to its native manager
-(conda/uv/sdkmanager/cargo, falling back to `_rm`), plus a trivial `rmdir` of emptied parent dirs.
-Everything else funnels through the guard below:
+(conda/uv/sdkmanager/cargo, falling back to `_rm`), a trivial `rmdir` of emptied parent dirs, and
+`--uninstall`/`--purge` removing dehoard's own footprint (a fixed set of `$HOME`-relative paths,
+behind its own preview and confirm). Everything else funnels through the guard below:
 
 ```mermaid
 flowchart TD

@@ -7,7 +7,8 @@ Thanks for your interest! `dehoard` is a single auditable zsh script, small, saf
 1. **Preview by default.** Nothing deletes without `--apply`. Every new cleanup path must go
    through the `_rm` helper (which is preview-aware and guards `$HOME` / `/`). A few existing
    deletions are audited exceptions (the `--deep` `sudo` system-cache sweep, `--models`' `ollama rm`,
-   the `--scan --pick` native env-manager uninstallers); do not add new ones.
+   the `--scan --pick` native env-manager uninstallers, and `--uninstall`/`--purge` removing dehoard's
+   own footprint); do not add a new cleanup-path deleter outside `_rm`.
 2. **Only regenerable data.** We delete caches, build artifacts, re-downloadable framework/model
    *caches* (HuggingFace, NLTK, PyTorch hub), and editor-flagged stale versions, never user source,
    git history, documents, or media. Actual model *weights* are user data: reported, and removed

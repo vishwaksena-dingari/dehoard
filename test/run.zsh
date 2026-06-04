@@ -463,7 +463,7 @@ mkdir -p "$FIX/.npm/_npx"; : > "$FIX/.npm/_npx/x"
 ( HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_PM_TIMEOUT=2 \
     zsh "$SCRIPT" --apply --yes >"$FIX/out" 2>&1 ) &
 run_pid=$!
-( sleep 40; kill -9 $run_pid 2>/dev/null ) &     # safety net: a broken guard must not hang CI
+( sleep 90; kill -9 $run_pid 2>/dev/null ) &     # safety net (wide margin: the guarded run finishes in ~2s, so 137 means a truly hung guard, not a slow box)
 wd_pid=$!
 wait $run_pid 2>/dev/null; run_rc=$?
 kill $wd_pid 2>/dev/null; wait $wd_pid 2>/dev/null
@@ -929,14 +929,54 @@ rm -rf "$FIX"
 # --uninstall must still KEEP the ignore file (remove only the logs); --purge removes it.
 FIX=$(mktemp -d); SH="$FIX/shared/dehoard"; mkdir -p "$SH"
 : > "$SH/run-x.log"; print -r -- "$FIX/keepsafe" > "$SH/ignore"
-HOME="$FIX" XDG_CACHE_HOME="$FIX/shared" XDG_CONFIG_HOME="$FIX/shared" zsh "$SCRIPT" --uninstall --yes >/dev/null 2>&1
+uoc=$(HOME="$FIX" XDG_CACHE_HOME="$FIX/shared" XDG_CONFIG_HOME="$FIX/shared" zsh "$SCRIPT" --uninstall --yes 2>&1)
 [[ -f "$SH/ignore" && ! -e "$SH/run-x.log" ]] \
   && ok "--uninstall (XDG cache==config): keeps the ignore list, removes only the logs" \
   || bad "--uninstall (XDG cache==config): deleted the ignore list or kept the logs"
+# Preview honesty: the "Will remove:" line must show the narrowed run-*.log target, not the whole dir.
+grep -q "run-\*.log" <<< "$uoc" \
+  && ok "--uninstall (XDG cache==config): preview names the narrowed run-*.log target, not the whole dir" \
+  || bad "--uninstall (XDG cache==config): preview over-claims the whole dir while keeping the ignore list"
 HOME="$FIX" XDG_CACHE_HOME="$FIX/shared" XDG_CONFIG_HOME="$FIX/shared" zsh "$SCRIPT" --purge --yes >/dev/null 2>&1
 [[ ! -f "$SH/ignore" ]] \
   && ok "--purge (XDG cache==config): removes the shared ignore list too" \
   || bad "--purge (XDG cache==config): left the ignore list behind"
+rm -rf "$FIX"
+
+# 5O, uninstall edge branches the earlier tests skipped (all reachable for a fresh curl|zsh user).
+# (a) "Nothing to remove": no cache dir, no ignore, non-standard script copy -> prints it, removes nothing
+FIX=$(mktemp -d)
+no=$(HOME="$FIX" zsh "$SCRIPT" --uninstall --yes 2>&1)
+{ grep -q "Nothing to remove" <<< "$no" && [[ ! -d "$FIX/.cache/dehoard" && ! -d "$FIX/.config/dehoard" ]] } \
+  && ok "--uninstall: 'Nothing to remove' when there is no footprint (fresh user), creates/deletes nothing" \
+  || bad "--uninstall: empty-footprint case did not report 'Nothing to remove' cleanly"
+rm -rf "$FIX"
+# (b) curl|zsh: $0 is not a real file -> only the cache dir goes, NO spurious "remove it yourself" warning
+FIX=$(mktemp -d); mkdir -p "$FIX/.cache/dehoard"; : > "$FIX/.cache/dehoard/run-x.log"
+co=$(HOME="$FIX" zsh -c "$(cat "$SCRIPT")" dehoard --uninstall --yes 2>&1)
+{ [[ ! -d "$FIX/.cache/dehoard" ]] && ! grep -qi "remove it yourself\|remove it manually" <<< "$co" } \
+  && ok "--uninstall via curl|zsh (\$0 not a file): removes logs, no spurious script-removal hint" \
+  || bad "--uninstall via curl|zsh: kept the logs or printed a spurious script hint"
+rm -rf "$FIX"
+# (c) no ignore file present: no "kept your ignore list" line on --uninstall, no "contents" echo on --purge
+FIX=$(mktemp -d); mkdir -p "$FIX/.cache/dehoard"; : > "$FIX/.cache/dehoard/run-x.log"
+io=$(HOME="$FIX" zsh "$SCRIPT" --uninstall --yes 2>&1)
+! grep -qi "kept your ignore list" <<< "$io" \
+  && ok "--uninstall with no ignore file: no spurious 'kept your ignore list' line" \
+  || bad "--uninstall claimed to keep an ignore list that does not exist"
+FIX2=$(mktemp -d); mkdir -p "$FIX2/.cache/dehoard"; : > "$FIX2/.cache/dehoard/run-x.log"
+po=$(HOME="$FIX2" zsh "$SCRIPT" --purge --yes 2>&1)
+{ grep -q "dehoard uninstalled" <<< "$po" && ! grep -qi "ignore list contents" <<< "$po" } \
+  && ok "--purge with no ignore file: succeeds, no 'ignore list contents' echo" \
+  || bad "--purge with no ignore file: errored or echoed nonexistent contents"
+rm -rf "$FIX" "$FIX2"
+# (d) --report log glob honors XDG_CACHE_HOME (not a literal ~/.cache): the 'Last --apply run' line finds it
+FIX=$(mktemp -d); XC="$FIX/xc/dehoard"; mkdir -p "$XC"
+print -r -- $'4\t/x' > "$XC/run-20260101-000000.log"; touch -t 202601010000 "$XC/run-20260101-000000.log"
+ro=$(HOME="$FIX" XDG_CACHE_HOME="$FIX/xc" zsh "$SCRIPT" --report 2>/dev/null)
+grep -q "Last --apply run" <<< "$ro" \
+  && ok "--report log glob honors XDG_CACHE_HOME (finds logs outside ~/.cache)" \
+  || bad "--report missed logs under XDG_CACHE_HOME (glob still hardcoded ~/.cache)"
 rm -rf "$FIX"
 
 # 6, syntax

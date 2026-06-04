@@ -68,7 +68,8 @@ flowchart TD
 Nearly every candidate goes through the same gates: the ignore list, the preview/apply gate, an
 optional confirmation, and the safe-root guard inside the delete primitive (`_rm`). A few audited
 deletions run outside `_rm`, all still `--apply`-gated: `--deep`'s root-owned system-cache sweep
-(`sudo rm`) and `--models`' `ollama rm`; see [docs/SAFETY.md](docs/SAFETY.md).
+(`sudo rm`), `--models`' `ollama rm`, and `--uninstall`/`--purge` removing dehoard's own footprint;
+see [docs/SAFETY.md](docs/SAFETY.md).
 The read-only modes (`--report`, `--json`) branch off early and never reach a delete.
 
 `--scan --pick` adds an interactive selection layer on top of these gates rather than replacing them:

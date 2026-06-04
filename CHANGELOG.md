@@ -3,6 +3,32 @@
 All notable changes to `dehoard` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [0.2.4]: 2026-06-04
+
+### Fixed
+- **`--uninstall` preview now matches what it deletes in the rare XDG-overlap case.** When
+  `XDG_CACHE_HOME` and `XDG_CONFIG_HOME` point at the same directory, a plain `--uninstall` keeps the
+  ignore list and removes only the logs; the "Will remove:" line wrongly named the whole directory.
+  It now names the narrowed `run-*.log` target, so the preview always matches the action.
+- **Cross-tool duplicate detection groups the Command R family correctly.** The model-name normalizer
+  turned hyphens into spaces before matching, so `command-r` / `command-r-plus` fell through to a
+  generic key. They now normalize to a shared `commandr` key (read-only; affects `--report`/`--json`
+  grouping only).
+
+### Changed
+- The five governance docs (RULES, SAFETY, ARCHITECTURE, CONTRIBUTING, README) now list
+  `--uninstall`/`--purge`'s `rm -rf` among the audited deletions that run outside `_rm`, framed as the
+  one sanctioned exception that removes dehoard's own fixed footprint rather than a user cleanup
+  candidate. The "new code must not add more" wording is reconciled accordingly: the rule bars new
+  deleters of user cleanup paths outside `_rm`, and the listed exceptions are exhaustive.
+
+### Notes
+- Follow-ups from a deeper 4-agent audit (whole-script bug hunt, code-doc alignment, test quality,
+  prose); no behavior change to the normal path, no new flags. Added test coverage for the uninstall
+  edge branches a fresh `curl | zsh` user hits (empty footprint, `$0` not a real file, no ignore file
+  present, `--report` honoring `XDG_CACHE_HOME`) and widened the package-manager-timeout test's margin.
+  98 assertions (was 92).
+
 ## [0.2.3]: 2026-06-04
 
 ### Added
