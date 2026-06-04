@@ -39,6 +39,45 @@ The guard diagram and the test suite behind these claims are in [docs/SAFETY.md]
 
 ---
 
+## Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/vishwaksena-dingari/dehoard/main/install.sh | bash
+```
+
+That installs the single script to `~/.local/bin/dehoard` (make sure `~/.local/bin` is on your PATH).
+Prefer to read it before you run it? Download the one file and inspect it first:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/vishwaksena-dingari/dehoard/main/dehoard.sh -o dehoard.sh
+chmod +x dehoard.sh
+# or clone:
+git clone https://github.com/vishwaksena-dingari/dehoard && cd dehoard
+```
+
+Requires macOS and zsh (the default shell since Catalina). To remove dehoard later: `dehoard --uninstall`.
+
+## Quickstart
+
+Preview before you apply.
+
+```sh
+dehoard --report                          # fast map: biggest dirs, reclaimable caches, duplicate models (start here)
+dehoard --deep --models --scan --dry-run  # exhaustive preview: every item that would be deleted, deletes nothing
+dehoard --apply                           # reclaim the always-safe Tier 1
+dehoard --scan --pick --apply             # pick interactively which project artifacts to delete
+```
+
+If you downloaded the single script instead of installing it, run `./dehoard.sh` in place of `dehoard`.
+Flags combine in any order, and without `--apply` (or with `--dry-run`) any combination only previews.
+`--report` is its own read-only mode: it prints the map and exits, so it does not stack with the
+action-flag preview; run both to see everything (the report for the duplicate-model finder, the
+dry-run combo for the exact per-item delete list). The `--pick` picker covers `--scan` project
+artifacts only: Tier 1 is a safe batch, and model weights are removed solely through `--models`, so
+neither appears in the picker.
+
+---
+
 ## How a run works
 
 This traces one run: the root check, the read-only branch, and the gates every deletion candidate
@@ -79,37 +118,6 @@ empty selection or Esc skips that category (deletes nothing), and every path deh
 still passes the safe-root guard; environment managers (conda/uv/Android/Rust) use their own uninstaller.
 
 ---
-
-## Quickstart
-
-Preview before you apply.
-
-```sh
-./dehoard.sh --report                          # fast map: biggest dirs, reclaimable caches, duplicate models (start here)
-./dehoard.sh --deep --models --scan --dry-run  # exhaustive preview: every item that would be deleted, deletes nothing
-./dehoard.sh --apply                            # reclaim the always-safe Tier 1
-./dehoard.sh --scan --pick --apply              # pick interactively which project artifacts to delete
-```
-
-Flags combine in any order, and without `--apply` (or with `--dry-run`) any combination only previews.
-`--report` is its own read-only mode: it prints the map and exits, so it does not stack with the
-action-flag preview; run both to see everything (the report for the duplicate-model finder, the
-dry-run combo for the exact per-item delete list). The `--pick` picker covers `--scan` project
-artifacts only: Tier 1 is a safe batch, and model weights are removed solely through `--models`, so
-neither appears in the picker.
-
-## Install
-
-```sh
-# one file; read it before you run it
-curl -fsSL https://raw.githubusercontent.com/vishwaksena-dingari/dehoard/main/dehoard.sh -o dehoard.sh
-chmod +x dehoard.sh
-
-# or clone
-git clone https://github.com/vishwaksena-dingari/dehoard && cd dehoard
-```
-
-Requires macOS and zsh (the default shell since Catalina).
 
 ## Usage
 
