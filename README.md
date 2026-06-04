@@ -3,8 +3,8 @@
 A disk-space cleaner for macOS, aimed at developers and ML engineers. It removes the regenerable
 junk that piles up in dev and ML toolchains (caches, virtual environments, build artifacts, Docker
 disk images, editor leftovers) and leaves your real data alone. It also finds the same model
-downloaded into more than one tool, which is often the biggest single thing eating space on a
-machine that runs models locally.
+downloaded into more than one tool (Ollama, LM Studio, HuggingFace), which is often the biggest
+single thing eating space on a machine that runs models locally.
 
 dehoard is one zsh script you can read top to bottom before trusting it. It previews by default: a
 plain run prints what it would delete and removes nothing until you pass `--apply`.
