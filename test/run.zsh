@@ -23,7 +23,18 @@ _NOTIFY_STUB=$(mktemp -d)
 { echo '#!/bin/sh'; echo 'exit 0'; } > "$_NOTIFY_STUB/osascript"
 chmod +x "$_NOTIFY_STUB/osascript"
 SAFE_PATH="$_NOTIFY_STUB:$SAFE_PATH"
-trap 'rm -rf "$_NOTIFY_STUB"' EXIT INT TERM
+
+# Fixture TMPDIR for the WHOLE suite. Setting only $HOME is not enough to make a run hermetic:
+# Tier 1 deletes `${TMPDIR}node-compile-cache`, `${TMPDIR}hsperfdata_*`, `${BASE}/C/*.helper`, etc,
+# and $TMPDIR/$BASE are derived from the INHERITED environment, not from $HOME. Those paths are
+# inside the safe-root whitelist, so they were really deleted — every `--apply` test was eating the
+# developer's (and CI's) actual temp caches. That also produced a self-healing flake: a run deleted
+# a real `node-compile-cache`, `_FREED_KB` became non-zero, the "no notification when nothing was
+# freed" assertion failed, and the next four runs passed because the file was already gone.
+# Tests that deliberately exercise a hostile or unset TMPDIR override this per-invocation.
+_FIXTURE_TMPDIR=$(mktemp -d)
+export TMPDIR="${_FIXTURE_TMPDIR%/}/"
+trap 'rm -rf "$_NOTIFY_STUB" "$_FIXTURE_TMPDIR"' EXIT INT TERM
 
 PASS=0 FAIL=0
 ok()  { print -P "  %F{green}✓%f $1"; (( ++PASS )); return 0; }
@@ -324,10 +335,19 @@ for _bad_var in DEHOARD_HELD_OPEN_MIN_GB CACHE_MIN_MB DEHOARD_PM_TIMEOUT; do
   rm -rf "$FIX"
 done
 # A legitimate numeric override must still be honored (the guard must not reject valid input).
+# NOTE: this must NOT use --version. --version exits early, hundreds of lines before
+# _num_or_default runs, so such a test passes even against a guard that rejects every legal
+# integer. Assert on the guard's own stderr warning instead: it must fire for a bad value and
+# stay silent for a good one.
 new_fixture
-DEHOARD_HELD_OPEN_MIN_GB=20 HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --version >/dev/null 2>&1 \
-  && ok "numeric env-var override still accepted after the injection guard" \
-  || bad "injection guard rejects a valid numeric override"
+out=$(DEHOARD_HELD_OPEN_MIN_GB=20 HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" 2>&1 >/dev/null)
+[[ "$out" != *"ignoring non-numeric"* ]] \
+  && ok "numeric env-var override (20) is accepted, no spurious warning" \
+  || bad "injection guard rejected a valid numeric override: [$out]"
+out=$(DEHOARD_HELD_OPEN_MIN_GB="5.5" HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" 2>&1 >/dev/null)
+[[ "$out" == *"ignoring non-numeric DEHOARD_HELD_OPEN_MIN_GB='5.5'"* ]] \
+  && ok "non-integer env var is rejected by name and value on stderr" \
+  || bad "guard did not report a rejected non-integer: [$out]"
 rm -rf "$FIX"
 
 # Held-open deleted inodes: a process sitting on deleted files keeps their blocks, so df
@@ -336,11 +356,33 @@ rm -rf "$FIX"
 FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; LOG="$FIX/stub.log"
 make_stubs "$STUBDIR"
 _fake_lsof() {   # $1 = bytes held by the single fake process
+  # Must emit D (device) and i (inode): the parser accumulates on the inode record so it can
+  # dedup a file that lsof reports once per descriptor and once per mmap.
   { echo '#!/bin/sh'
-    echo 'printf "p4242\ncbloatd\nftxt\ns'"$1"'\nn/private/var/tmp/deleted.db\n"'
+    echo 'printf "p4242\ncbloatd\nftxt\nD0x99\ns'"$1"'\ni4242001\n"'
     echo 'exit 0'; } > "$STUBDIR/lsof"
   chmod +x "$STUBDIR/lsof"
 }
+# Dedup: lsof emits one record per descriptor AND per mmap, each with the file's FULL size, so the
+# same deleted inode opened twice must be counted ONCE. Two descriptors (f3/f4), same device+inode.
+{ echo '#!/bin/sh'
+  echo 'printf "p777\ncdoubled\nf3\nD0xAA\ns1073741824\ni999\nf4\nD0xAA\ns1073741824\ni999\n"'
+  echo 'exit 0'; } > "$STUBDIR/lsof"
+chmod +x "$STUBDIR/lsof"
+HOME="$FIX" STUB_LOG="$LOG" PATH="$STUBDIR:$SAFE_PATH" zsh "$SCRIPT" --json 2>/dev/null \
+  | python3 -c 'import json,sys; assert json.load(sys.stdin)["held_open_deleted_bytes"]==1073741824' 2>/dev/null \
+  && ok "held-open: same inode on two descriptors counted once, not doubled" \
+  || bad "held-open: double-counted a single inode held on two descriptors"
+# And globally: one deleted inode shared by TWO processes still occupies its blocks only once.
+{ echo '#!/bin/sh'
+  echo 'printf "p101\ncalpha\nf3\nD0xBB\ns2147483648\ni555\np102\ncbeta\nf3\nD0xBB\ns2147483648\ni555\n"'
+  echo 'exit 0'; } > "$STUBDIR/lsof"
+chmod +x "$STUBDIR/lsof"
+HOME="$FIX" STUB_LOG="$LOG" PATH="$STUBDIR:$SAFE_PATH" zsh "$SCRIPT" --json 2>/dev/null \
+  | python3 -c 'import json,sys; assert json.load(sys.stdin)["held_open_deleted_bytes"]==2147483648' 2>/dev/null \
+  && ok "held-open: one inode shared by two processes counted once in the global total" \
+  || bad "held-open: global total inflated by the sharing factor"
+
 _fake_lsof 27917287424        # 26 GB, well over the 5 GB per-process threshold
 out=$(HOME="$FIX" STUB_LOG="$LOG" PATH="$STUBDIR:$SAFE_PATH" zsh "$SCRIPT" --report 2>/dev/null)
 [[ "$out" == *"26.0 GB is held by deleted files"* && "$out" == *"bloatd (pid 4242)"* ]] \

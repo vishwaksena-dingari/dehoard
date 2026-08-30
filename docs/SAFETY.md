@@ -92,6 +92,13 @@ string compared to `"true"`. So a value of `0` is not a false-y flag: the shell 
 command named `0`, fails, and control falls through to the **delete** branch. A corrupted flag that
 merely *looks* false therefore deletes, and an is-it-empty check waves it straight through.
 
+**The flag itself is read-only.** Once `--apply`/`--dry-run` have been resolved, `$DRY_RUN` is
+frozen with `typeset -r`. This is the structural fix, and it is deliberately *upstream* of the `_rm`
+check above: `$DRY_RUN` is executed as a boolean command at roughly thirty sites, and most are not
+`_rm` — `$DRY_RUN || chmod -R u+w`, the `sudo` Apple-cache sweep, `ollama rm`, `conda env remove`.
+Guarding one consumer would leave every other door open. Frozen, any later assignment aborts the run
+loudly rather than silently switching it into deletion.
+
 **Numeric environment variables are validated before use.** `CACHE_MIN_MB`, `DEHOARD_PM_TIMEOUT`,
 and `DEHOARD_HELD_OPEN_MIN_GB` must be bare non-negative integers; a non-numeric value is reported
 on stderr and replaced with its documented default. This is a safety guard rather than input
@@ -155,6 +162,8 @@ among other things, that:
 - `_rm` fails closed on a `$DRY_RUN` that is unset *or* corrupted (`0`, `1`, `""`, `TRUE`, `yes`);
 - a numeric env var set to an arithmetic-assignment payload (`(DRY_RUN=0)`) cannot flip a preview
   into a real deletion, while a legitimate numeric override is still honored.
+- held-open byte totals are deduplicated on device+inode, so a file lsof reports once per descriptor
+  and once per mmap is counted once, not many times.
 
 If a change breaks any of these, CI fails. That suite is the real safety contract; this page is its
 human-readable summary.

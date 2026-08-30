@@ -25,6 +25,19 @@ Zero-consequence, regenerable junk:
 - **Trash** and old iOS device crash logs.
 - **Time Machine local snapshots**: all but the newest (kept as a safety net). Requires sudo.
 
+## `--report` only: named, never deleted
+
+These are surfaced with their size so you can decide. dehoard never removes them under any flag.
+
+- **VM / container disk images under Application Support** (`.img`, `.img.zst`, `.raw`, `.qcow2`,
+  `.vmdk`, `.vdi` over 500 MB): **reported only, never deleted**. The extension reliably says a file
+  is a runtime substrate, but nothing on disk says whether *this* one is disposable, so dehoard
+  prints the size and stops. This is app-agnostic and covers tools no rule lists — Claude Desktop's
+  `claudevm.bundle` alone can hold ~21 GB. Sizes come from `du`, not `ls`: these files are sparse
+  (Docker's image reads 1.0 TB apparent vs 8.4 GB real). Scanned at depth 4, which costs ~0.4s;
+  `~/Library/Containers` is deliberately *not* crawled (≈800 sandboxed containers, ~52s), which is
+  why Docker's own image keeps a dedicated entry under `--deep` below.
+
 ## Tier 2: `--deep` (real but minor cost: a rebuild or re-download)
 
 - **All user Library caches** (`~/Library/Caches/*`).
@@ -33,14 +46,6 @@ Zero-consequence, regenerable junk:
 - **Xcode DerivedData** (compiled build products; source untouched).
 - **Docker**: `system prune` + `builder prune`; also reports the Docker/OrbStack/Colima disk-image
   size (those `.raw`/`.img` files never shrink on their own, reported, never auto-deleted).
-- **VM / container disk images under Application Support** (`.img`, `.img.zst`, `.raw`, `.qcow2`,
-  `.vmdk`, `.vdi` over 500 MB): **reported only, never deleted**. The extension reliably says a file
-  is a runtime substrate, but nothing on disk says whether *this* one is disposable, so dehoard
-  prints the size and stops. This is app-agnostic and covers tools no rule lists — Claude Desktop's
-  `claudevm.bundle` alone can hold ~21 GB. Sizes come from `du`, not `ls`: these files are sparse
-  (Docker's image reads 1.0 TB apparent vs 8.4 GB real). Scanned at depth 4, which costs ~0.4s;
-  `~/Library/Containers` is deliberately *not* crawled (≈800 sandboxed containers, ~52s), so Docker
-  stays individually listed above.
 - **HuggingFace cache** (`~/.cache/huggingface`), re-downloads on next use.
 - **Playwright / Puppeteer** browser binaries.
 - **Unavailable iOS simulator devices** + CoreSimulator caches. Simulator *runtimes* are NOT

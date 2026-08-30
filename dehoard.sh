@@ -24,6 +24,12 @@ GIT_GC_ROOTS=(~/Documents ~/src ~/Desktop ~/Developer "${EXTRA_SCAN_DIRS[@]}")
 # trunk/...). Guards against a single tool hanging the whole run. Env-overridable:
 #   DEHOARD_PM_TIMEOUT=300 dehoard --apply
 : ${DEHOARD_PM_TIMEOUT:=120}
+# Per-process floor (GB) before dehoard reports a process holding deleted-but-still-open files.
+# Those blocks stay allocated, so `df` under-reports until the holder exits. Calibrated on an idle
+# developer Mac (~1.5 GB of ambient held inodes is normal; noisiest single process measured 0.43 GB).
+# Raise it if a machine running Docker, a database, or a long-lived browser makes this routine:
+#   DEHOARD_HELD_OPEN_MIN_GB=20 dehoard --report
+: ${DEHOARD_HELD_OPEN_MIN_GB:=5}
 # Set to 'true' to make --apply the default so you don't have to type it every run.
 # Add  export DEHOARD_APPLY_DEFAULT=true  to your ~/.zshrc to make it permanent.
 # Override back to safe preview for a single run:  DEHOARD_APPLY_DEFAULT=false dehoard
@@ -48,6 +54,7 @@ _num_or_default() {   # $1=var name, $2=fallback; resets the var and warns if it
 }
 _num_or_default CACHE_MIN_MB 100
 _num_or_default DEHOARD_PM_TIMEOUT 120
+_num_or_default DEHOARD_HELD_OPEN_MIN_GB 5
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Safety: must not run as root, breaks Homebrew, npm, pip
@@ -592,9 +599,19 @@ _snapshot_sink() {
     echo "dehoard: could not create ${_SNAP_DIR/#$HOME/~}, snapshot not saved." >&2
     return
   fi
-  local _f="$_SNAP_DIR/$(date -u +%Y%m%dT%H%M%SZ).json"
-  tee "$_f"
-  echo "dehoard: snapshot saved to ${_f/#$HOME/~}" >&2   # stderr, so stdout stays pure JSON
+  # Whole-second timestamps collide when two runs land in the same second (a loop, or a launchd
+  # job racing a manual run), and `tee` would silently overwrite the earlier archive. Suffix on
+  # collision rather than clobber: a snapshot you cannot recreate is the whole point of the flag.
+  local _stamp="$(date -u +%Y%m%dT%H%M%SZ)" _f _n=1
+  _f="$_SNAP_DIR/${_stamp}.json"
+  while [[ -e "$_f" ]]; do _f="$_SNAP_DIR/${_stamp}-${_n}.json"; (( _n++ )); done
+  # Report what actually happened: `tee` can fail on a full or read-only volume, and announcing a
+  # file that does not exist is worse than announcing nothing.
+  if tee "$_f"; then
+    echo "dehoard: snapshot saved to ${_f/#$HOME/~}" >&2  # stderr, so stdout stays pure JSON
+  else
+    echo "dehoard: snapshot NOT saved (could not write ${_f/#$HOME/~})." >&2
+  fi
 }
 # One-time migration: the ignore list used to live under ~/.cache; it is config, so move it to the
 # config dir. Cheap (two stat checks); transparent; preserves an existing list.
@@ -666,6 +683,14 @@ fi
 [[ "${DEHOARD_APPLY_DEFAULT:-false}" == true ]] && APPLY=true   # env opt-in (compared, not run); --dry-run below overrides
 $APPLY || DRY_RUN=true
 $DRY_RUN && APPLY=false                          # --dry-run beats everything, always
+# Freeze the preview/delete flag now that it is final. This is the ROOT fix for the class of bug
+# where a hostile value flips a preview into a real deletion: $DRY_RUN is executed as a boolean
+# COMMAND at ~30 sites, and most of them are not `_rm` — `$DRY_RUN || chmod -R u+w`, the `sudo rm`
+# Apple-cache sweep, `ollama rm`, `conda env remove`. Guarding only `_rm` leaves every one of those
+# doors open. Read-only means any later assignment (including one smuggled through zsh arithmetic,
+# where a variable's value is evaluated recursively and assignment is legal) aborts the run loudly
+# instead of silently deleting. Fail closed at the source, not at one consumer.
+typeset -r DRY_RUN
 
 # ── Semantic color (human-terminal only; never on a machine channel) ─────────
 # Enabled only when stdout is an interactive TTY, NO_COLOR is unset, and we are NOT
@@ -1005,19 +1030,24 @@ _rm() {
 # Threshold is per-PROCESS, not total: ~1.5 GB of ambient held inodes (plist caches, Spotlight,
 # widgets) is normal on an idle Mac, so a total-based limit would sit in the noise. Measured
 # baseline: noisiest single process 0.43 GB; the real incident was 26 GB in one process.
-# Overridable like the other knobs at the top of this file: the default is calibrated against an
-# idle developer Mac, and a machine running Docker, a database, or a long-lived browser can hold
-# far more as normal operation. Raise it if you get a warning you consider routine:
-#   DEHOARD_HELD_OPEN_MIN_GB=20 dehoard --report
-: ${DEHOARD_HELD_OPEN_MIN_GB:=5}
-_num_or_default DEHOARD_HELD_OPEN_MIN_GB 5    # see _num_or_default: a hostile value here could clobber $DRY_RUN
+# The knob itself lives in the USER CONFIG block at the top with every other one; only the
+# derived byte value is computed here, next to its single consumer.
 _HELD_OPEN_MIN_BYTES=$(( DEHOARD_HELD_OPEN_MIN_GB * 1073741824 ))   # ~11x the measured noisiest process
 _held_open_report() {               # echoes "<bytes>\t<command> (pid N)" for the worst offender, or nothing
   command -v lsof &>/dev/null || return
-  lsof -bnP -Fpcsn +L1 2>/dev/null | awk -v min="$_HELD_OPEN_MIN_BYTES" '
+  # Dedup on device+inode: lsof emits ONE record per descriptor AND per mmap, each carrying the
+  # file's FULL size, so `exec 3<f; exec 4<f` (or any mapped-and-opened library) would otherwise be
+  # counted twice. The blocks are held once. Requesting D and i is what makes that detectable; the
+  # `n` (name) field was requested before and never read, so it is gone.
+  lsof -bnP -FpcsDi +L1 2>/dev/null | awk -v min="$_HELD_OPEN_MIN_BYTES" '
     /^p/ { pid = substr($0, 2); next }
     /^c/ { cmd = substr($0, 2); next }
-    /^s/ { s = substr($0, 2); if (s ~ /^[0-9]+$/) b[cmd " (pid " pid ")"] += s; next }
+    /^f/ { dev = ""; sz = ""; next }                 # new descriptor block, reset its fields
+    /^D/ { dev = substr($0, 2); next }
+    /^s/ { sz  = substr($0, 2); next }
+    /^i/ { ino = substr($0, 2)
+           if (sz ~ /^[0-9]+$/ && !seen[pid, dev, ino]++) b[cmd " (pid " pid ")"] += sz
+           next }
     END  { for (k in b) if (b[k] >= min) printf "%d\t%s\n", b[k], k }
   ' | sort -rn | head -1
 }
@@ -1026,8 +1056,17 @@ _held_open_report() {               # echoes "<bytes>\t<command> (pid N)" for th
 # it wants the raw figure to reconcile against df itself. Prints 0 when lsof is unavailable.
 _held_open_total_bytes() {
   command -v lsof &>/dev/null || { echo 0; return; }
-  lsof -bnP -Fs +L1 2>/dev/null | awk '
-    /^s/ { s = substr($0, 2); if (s ~ /^[0-9]+$/) t += s }
+  # Dedup GLOBALLY on device+inode, not per process: one deleted dylib mapped by 40 running
+  # processes yields 40 records of its full size, but occupies its blocks exactly ONCE. Summing
+  # raw records inflates the figure by the sharing factor, and this number is presented as the
+  # explanation for df disagreeing — an inflated one makes df look wrong when it is not.
+  lsof -bnP -FsDi +L1 2>/dev/null | awk '
+    /^f/ { dev = ""; sz = ""; next }
+    /^D/ { dev = substr($0, 2); next }
+    /^s/ { sz  = substr($0, 2); next }
+    /^i/ { ino = substr($0, 2)
+           if (sz ~ /^[0-9]+$/ && !seen[dev, ino]++) t += sz
+           next }
     END  { printf "%d\n", t + 0 }'
 }
 _warn_held_open() {
@@ -1036,8 +1075,11 @@ _warn_held_open() {
   local _bytes="${_h%%$'\t'*}" _who="${_h#*$'\t'}"
   # One decimal, via float division: integer division prints 26.9 GB as "26", and anything
   # under 1 GB as "0 GB" (the same unit bug this release fixes for the freed-space notification).
-  echo "$(c_warn "⚠️  $(printf '%.1f' $(( _bytes / 1073741824.0 ))) GB is held by deleted files still open in ${_who}.")"
-  echo "$(c_dim  "   df under-reports free space until that process exits. dehoard cannot reclaim it.")"
+  # print -r --, not echo: ${_who} is another process's command name, which that process chooses
+  # freely (argv[0]). zsh's `echo` expands backslash sequences, so a process named `x\e[2J` would
+  # clear the user's terminal mid-report. `print -r --` emits the bytes verbatim.
+  print -r -- "$(c_warn "⚠️  $(printf '%.1f' $(( _bytes / 1073741824.0 ))) GB is held by deleted files still open in ${_who}.")"
+  print -r -- "$(c_dim  "   df under-reports free space until that process exits. dehoard cannot reclaim it.")"
 }
 
 _run_timeout() {

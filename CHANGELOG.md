@@ -38,6 +38,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow 
   itself, including from a route nobody has found yet.
 
 ### Fixed
+- **`$DRY_RUN` is now read-only once the flag is final (`typeset -r`), which is the ROOT fix.** The
+  first pass guarded `_rm`, but `$DRY_RUN` is executed as a boolean command at ~30 sites and most of
+  them are not `_rm` — `$DRY_RUN || chmod -R u+w`, the `sudo rm` Apple-cache sweep, `ollama rm`,
+  `conda env remove`. All of those take the destructive branch on a corrupted flag, so guarding one
+  consumer left every other door open. Freezing the variable makes any later assignment abort the
+  run loudly instead of silently deleting.
+- **Held-open byte totals were inflated.** `lsof` emits one record per file descriptor *and* per
+  mmap, each carrying the file's full size, so a file opened twice (or a deleted dylib mapped by many
+  processes) was counted once per record. Measured on the author's machine: 1.66 GB reported vs
+  **1.04 GB actual**, a 37% over-count. Records are now deduplicated on device+inode — per process
+  for the human warning, and *globally* for `held_open_deleted_bytes`, because one deleted inode
+  shared by 40 processes still occupies its blocks exactly once. This matters because the number is
+  presented as the explanation for `df` disagreeing; an inflated one makes `df` look wrong when it
+  is not.
+- **The test suite was deleting real files from the developer's `TMPDIR`.** Tests set `$HOME` but not
+  `$TMPDIR`, and Tier 1 removes `${TMPDIR}node-compile-cache`, `hsperfdata_*`, `${BASE}/C/*.helper`
+  and similar — paths derived from the *inherited* environment and inside the safe-root whitelist, so
+  they were genuinely removed on every `--apply` test. This also produced a self-healing flake: a run
+  deleted a real `node-compile-cache`, making `_FREED_KB` non-zero, which failed the "no notification
+  when nothing was freed" assertion — and the next four runs passed because the file was gone. The
+  suite now exports a fixture `TMPDIR`; tests that deliberately exercise a hostile or unset `TMPDIR`
+  still override it.
+- **A process name can no longer inject terminal escapes.** The held-open warning interpolates
+  another process's command name, which that process chooses via `argv[0]`, into output. zsh's `echo`
+  expands backslash sequences, so a process named `x\e[2J` could clear the user's terminal mid-report.
+  Now emitted with `print -r --`.
+- **`--snapshot` no longer silently overwrites or lies about success.** Timestamps are whole seconds,
+  so two runs in the same second wrote the same file; colliding names now get a numeric suffix. And
+  `tee`'s exit status was ignored, so "snapshot saved" printed even when the write failed on a full
+  or read-only volume; the failure is now reported instead.
+- **A vacuous test.** The "valid numeric override is accepted" assertion invoked `--version`, which
+  exits hundreds of lines before the validation it claimed to exercise, so it passed unconditionally
+  — including against a guard that rejected every legal integer. It now asserts on the guard's own
+  stderr, in both the accept and reject directions.
 - **A run no longer aborts when `du` returns nothing.** Two sites summed sizes with a command
   substitution *inside* an arithmetic expansion (`$(( kb + $(du -sk …) ))`). When `du` printed
   nothing — a path racing away mid-scan, or an unreadable directory — this expanded to `$(( kb + ))`
@@ -99,7 +133,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow 
   deletion that should not have been chosen.
 
 ### Tests
-- 124 assertions (was 104). New coverage: a typo'd flag cannot corrupt `--json`; `--snapshot` keeps
+- 127 assertions (was 104). New coverage: a typo'd flag cannot corrupt `--json`; `--snapshot` keeps
   stdout pipeable and archives exactly one valid document; `--json` alone never archives; a run that
   frees nothing posts no notification; and `lsof` is stubbed in `-F` field mode to fake a 26 GB
   holder — asserting it is named with its size, that the wording never suggests killing it, that a
@@ -107,7 +141,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow 
   `held_open_deleted_bytes` is reported exactly both above and below the human threshold. Plus the
   arithmetic-injection regression: each of the three numeric env vars, set to `(DRY_RUN=0)`, must
   leave the victim file intact and still report a preview — and a valid numeric override must still
-  be accepted. Each was verified to fail against the unfixed code.
+  be accepted. Honest scope on that last point: only the `DEHOARD_HELD_OPEN_MIN_GB` strand actually
+  fails against the unfixed code. The other two are defense-in-depth assertions, because (as
+  analysed above) `CACHE_MIN_MB` was subshell-contained and `DEHOARD_PM_TIMEOUT` is only reachable
+  under `--apply`; they would have passed before the fix. Every other new assertion in this release
+  was individually verified to fail against the unfixed code.
 
 ## [0.2.6]: 2026-06-04
 
