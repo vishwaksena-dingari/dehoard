@@ -9,7 +9,7 @@ emulate zsh
 setopt NULL_GLOB
 
 # Version, keep in sync with the CHANGELOG release heading and the git tag.
-DEHOARD_VERSION="0.2.6"
+DEHOARD_VERSION="0.2.7"
 
 # ─── USER CONFIG ────────────────────────────────────────────────────────────
 # Extra directories to include when scanning for projects (git gc, etc.).
@@ -32,6 +32,22 @@ GIT_GC_ROOTS=(~/Documents ~/src ~/Desktop ~/Developer "${EXTRA_SCAN_DIRS[@]}")
 # appear, the ignore file will never be written, and any existing file is ignored.
 # Useful if you want a fully stateless tool or manage exclusions another way.
 : ${DEHOARD_IGNORE_ENABLED:=true}
+# Numeric env vars are validated as literal integers before ANY of them reaches a `$(( ))`
+# or `(( ))` context. This is a safety guard, not input hygiene: zsh evaluates a variable's
+# VALUE inside an arithmetic context, recursively, and arithmetic supports assignment. So a
+# value like `(DRY_RUN=0)` does not merely produce a wrong number, it clobbers whatever
+# variable it names, and DRY_RUN is the flag `_rm` branches on to decide preview vs delete.
+# A hostile value could therefore turn a preview run into a real deletion. Rejecting anything
+# that is not a bare non-negative integer makes that unrepresentable rather than relying on
+# each use site happening to sit inside a subshell.
+_num_or_default() {   # $1=var name, $2=fallback; resets the var and warns if it isn't <->
+  local _n="$1"
+  [[ "${(P)_n}" == <-> ]] && return
+  echo "dehoard: ignoring non-numeric ${_n}='${(P)_n}', using ${2}." >&2
+  eval "$_n=$2"
+}
+_num_or_default CACHE_MIN_MB 100
+_num_or_default DEHOARD_PM_TIMEOUT 120
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Safety: must not run as root, breaks Homebrew, npm, pip
@@ -80,6 +96,10 @@ FLAGS
   --report        read-only audit; never deletes
   --json          machine-readable model inventory (implies --report; pure JSON on stdout)
                   e.g. dehoard --json | jq '.cross_tool_duplicates'
+  --snapshot      same as --json, and also archives the document to
+                  ~/.cache/dehoard/snapshots/<UTC-timestamp>.json. Run it on a schedule to
+                  see what regrew between two dates:
+                    diff <(jq -S . old.json) <(jq -S . new.json)
   --list-ignored       show paths you've marked 'always skip'
   --unignore <path>    remove one path from the always-skip list
   --reset-ignore       clear the entire always-skip list and re-prompt everything
@@ -265,10 +285,16 @@ TIER 2: Only with --deep. There is a real cost after deletion.
      Both are browser runtimes for automated testing.
      Restore: npx playwright install  /  npx puppeteer browsers install
 
- 10. Unavailable iOS simulators + CoreSimulator cache
-     Runs 'xcrun simctl delete unavailable' to remove simulator runtimes
-     for iOS versions you no longer have installed. Never deletes active
-     simulators. Also clears ~/Library/Developer/CoreSimulator/Caches.
+ 10. Unavailable iOS simulator devices + CoreSimulator cache
+     Runs 'xcrun simctl delete unavailable' to remove simulator DEVICES
+     whose runtime is no longer installed. Never deletes active simulators.
+     Also clears ~/Library/Developer/CoreSimulator/Caches.
+     Does NOT remove runtimes themselves. Runtimes are the big ones (tens of
+     GB) and Xcode silently reinstalls them on update. dehoard leaves them
+     alone because 'simctl runtime delete all' cannot be scoped to unused
+     ones or previewed per-item. To clear them yourself:
+       xcrun simctl runtime list          # see what is installed
+       xcrun simctl runtime delete all    # removes ALL, re-downloaded on demand
      No-op if Xcode / xcrun is not installed.
 
  10b. VSCode + Cursor Application Support caches
@@ -554,6 +580,22 @@ _SELF="${0:A}"     # absolute, symlink-resolved path of THIS script (captured at
 _CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/dehoard"        # run-*.log deletion records (exhaust)
 _CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/dehoard"     # the ignore list (hand-authored intent)
 _IGNORE_FILE="$_CONFIG_DIR/ignore"
+_SNAP_DIR="$_CACHE_DIR/snapshots"                           # --snapshot archives (exhaust, like run-*.log)
+# --snapshot sink. stdin is the --json document; pass it through unchanged so piping still
+# works, and additionally archive it when asked. Collecting is cheap and unrecoverable if
+# skipped; DIFFING two snapshots is deliberately NOT built here (no schema contract yet):
+#   diff <(jq -S . a.json) <(jq -S . b.json)
+_snapshot_sink() {
+  if ! $SNAPSHOT; then cat; return; fi
+  if ! mkdir -p "$_SNAP_DIR" 2>/dev/null; then
+    cat                                                     # never let archiving break the report
+    echo "dehoard: could not create ${_SNAP_DIR/#$HOME/~}, snapshot not saved." >&2
+    return
+  fi
+  local _f="$_SNAP_DIR/$(date -u +%Y%m%dT%H%M%SZ).json"
+  tee "$_f"
+  echo "dehoard: snapshot saved to ${_f/#$HOME/~}" >&2   # stderr, so stdout stays pure JSON
+}
 # One-time migration: the ignore list used to live under ~/.cache; it is config, so move it to the
 # config dir. Cheap (two stat checks); transparent; preserves an existing list.
 if [[ -f "$_CACHE_DIR/ignore" && ! -f "$_IGNORE_FILE" ]]; then
@@ -568,6 +610,7 @@ REPORT=false
 APPLY=false
 JSON=false
 PICK=false
+SNAPSHOT=false
 for arg in "$@"; do
   [[ "$arg" == "--deep" ]]             && DEEP=true
   [[ "$arg" == "--models" ]]           && MODELS=true
@@ -578,6 +621,7 @@ for arg in "$@"; do
   [[ "$arg" == "--yes" || "$arg" == "-y" ]] && ASSUME_YES=true
   [[ "$arg" == "--report" ]]           && REPORT=true
   [[ "$arg" == "--json" ]]             && { JSON=true; REPORT=true; }   # --json implies a read-only report
+  [[ "$arg" == "--snapshot" ]]         && { SNAPSHOT=true; JSON=true; REPORT=true; }  # archive that report to disk
   if [[ "$arg" == "--reset-ignore" ]]; then
     rm -f "$_IGNORE_FILE"
     echo "dehoard: ignore list cleared."; exit 0
@@ -651,11 +695,13 @@ c_bold()   { _c '1'    "$@"; }   # bold     , emphasis / prompts
 c_step()   { if $DRY_RUN; then c_dim "$@"; else c_bold "$@"; fi }
 
 # Warn about unrecognised flags, catches typos like --scann silently running Tier 1 only
-_VALID_FLAGS=(--deep --models --scan --pick --dry-run --apply --yes -y --report --json --help -h --version -V --reset-ignore --list-ignored --unignore --uninstall --purge)
+_VALID_FLAGS=(--deep --models --scan --pick --dry-run --apply --yes -y --report --json --snapshot --help -h --version -V --reset-ignore --list-ignored --unignore --uninstall --purge)
 for arg in "$@"; do
   # Only warn about --flag tokens; bare paths (e.g. argument to --unignore) are not flags
   [[ "$arg" == --* || "$arg" == -[a-z] ]] || continue
-  (( ${_VALID_FLAGS[(Ie)$arg]} )) || echo "⚠️  Unknown flag: '$arg' (ignored, did you mean --scan or --deep?)"
+  # stderr, not stdout: under --json stdout must stay pure JSON, and a typo'd flag
+  # would otherwise prepend a warning line and make the document unparseable.
+  (( ${_VALID_FLAGS[(Ie)$arg]} )) || echo "⚠️  Unknown flag: '$arg' (ignored, did you mean --scan or --deep?)" >&2
 done
 
 $REPORT || echo "$(c_head "🧹 dehoard: disk reclaimer for ML/dev Macs")"
@@ -876,8 +922,12 @@ _rm() {
   # If it's empty/unset (e.g. a refactor accidentally scoped it to a function), the
   # `if $DRY_RUN` test is undefined, so REFUSE rather than risk deleting in what the
   # user believes is preview mode. Normal runs always set DRY_RUN, so this never fires.
-  if [[ -z "${DRY_RUN-}" ]]; then
-    echo "$(c_warn "  ⚠️  _rm refused: \$DRY_RUN unset, failing closed, nothing deleted.")" >&2
+  # Checking for "unset" is not enough: $DRY_RUN is a BOOLEAN COMMAND (`if $DRY_RUN`), so any
+  # value that is neither `true` nor `false` runs a bogus command, fails, and falls through to
+  # the DELETE branch. A clobbered value like `0` passes an is-it-empty test and then deletes.
+  # Demand one of the two legal values, so an unset, empty, or corrupted flag all fail closed.
+  if [[ "${DRY_RUN-}" != "true" && "${DRY_RUN-}" != "false" ]]; then
+    echo "$(c_warn "  ⚠️  _rm refused: \$DRY_RUN is '${DRY_RUN-<unset>}', not true/false, failing closed, nothing deleted.")" >&2
     return 1
   fi
   local target
@@ -940,6 +990,56 @@ _rm() {
 # manager waiting on a daemon or the network) cannot freeze the whole run. macOS has no
 # `timeout`; prefer it / gtimeout when installed, else poll a backgrounded child. Returns
 # the command's own exit code, or 124 if it was killed for exceeding $1 seconds.
+# Deleted-but-still-open files keep their blocks allocated, so `df` under-reports free space
+# until the holding process exits. dehoard cannot reclaim these, and the gap is invisible: the
+# author once lost 8 hours to a process sitting on 26 GB of deleted inodes while df "showed"
+# the disk filling. This states the fact and names the process. It never suggests killing
+# anything and never acts, deciding to end a process is the user's call, not a cleaner's.
+#
+#   lsof flags: -b avoids blocking syscalls (a stale NFS/SMB mount otherwise hangs the run),
+#   -n/-P skip DNS and port-name lookups. NO `-u $USER`: lsof ORs selection flags unless -a is
+#   given, so `-u $USER +L1` means "this user's files OR deleted-open files" (26x more rows).
+#   -F field mode is parsed instead of columns on purpose: in the plain table $7 is SIZE/OFF and
+#   $8 is NLINK, and filtering the wrong one silently matches nothing while looking correct.
+#
+# Threshold is per-PROCESS, not total: ~1.5 GB of ambient held inodes (plist caches, Spotlight,
+# widgets) is normal on an idle Mac, so a total-based limit would sit in the noise. Measured
+# baseline: noisiest single process 0.43 GB; the real incident was 26 GB in one process.
+# Overridable like the other knobs at the top of this file: the default is calibrated against an
+# idle developer Mac, and a machine running Docker, a database, or a long-lived browser can hold
+# far more as normal operation. Raise it if you get a warning you consider routine:
+#   DEHOARD_HELD_OPEN_MIN_GB=20 dehoard --report
+: ${DEHOARD_HELD_OPEN_MIN_GB:=5}
+_num_or_default DEHOARD_HELD_OPEN_MIN_GB 5    # see _num_or_default: a hostile value here could clobber $DRY_RUN
+_HELD_OPEN_MIN_BYTES=$(( DEHOARD_HELD_OPEN_MIN_GB * 1073741824 ))   # ~11x the measured noisiest process
+_held_open_report() {               # echoes "<bytes>\t<command> (pid N)" for the worst offender, or nothing
+  command -v lsof &>/dev/null || return
+  lsof -bnP -Fpcsn +L1 2>/dev/null | awk -v min="$_HELD_OPEN_MIN_BYTES" '
+    /^p/ { pid = substr($0, 2); next }
+    /^c/ { cmd = substr($0, 2); next }
+    /^s/ { s = substr($0, 2); if (s ~ /^[0-9]+$/) b[cmd " (pid " pid ")"] += s; next }
+    END  { for (k in b) if (b[k] >= min) printf "%d\t%s\n", b[k], k }
+  ' | sort -rn | head -1
+}
+# Total bytes in deleted-but-open files, UNTHRESHOLDED, for --json. The human warning needs a
+# threshold because a banner that cries wolf is worse than silence; a machine consumer does not,
+# it wants the raw figure to reconcile against df itself. Prints 0 when lsof is unavailable.
+_held_open_total_bytes() {
+  command -v lsof &>/dev/null || { echo 0; return; }
+  lsof -bnP -Fs +L1 2>/dev/null | awk '
+    /^s/ { s = substr($0, 2); if (s ~ /^[0-9]+$/) t += s }
+    END  { printf "%d\n", t + 0 }'
+}
+_warn_held_open() {
+  local _h; _h=$(_held_open_report)
+  [[ -n "$_h" ]] || return
+  local _bytes="${_h%%$'\t'*}" _who="${_h#*$'\t'}"
+  # One decimal, via float division: integer division prints 26.9 GB as "26", and anything
+  # under 1 GB as "0 GB" (the same unit bug this release fixes for the freed-space notification).
+  echo "$(c_warn "⚠️  $(printf '%.1f' $(( _bytes / 1073741824.0 ))) GB is held by deleted files still open in ${_who}.")"
+  echo "$(c_dim  "   df under-reports free space until that process exits. dehoard cannot reclaim it.")"
+}
+
 _run_timeout() {
   local secs="$1"; shift
   (( $# )) || return 0
@@ -1156,6 +1256,7 @@ run_report() {
 if $REPORT; then
  if ! $JSON; then   # ── human-only report preamble (skipped entirely when --json) ──
   echo "📊 Disk usage report (read-only, nothing will be deleted)"
+  _warn_held_open      # --report exits before print_result, so it needs its own call site
   # Surface last --apply run from existing deletion logs (zero new state, reads only).
   # Use zsh array glob (not ls glob) so NULL_GLOB expands to empty when no logs exist.
   local _last_log _last_date _last_freed
@@ -1185,6 +1286,25 @@ if $REPORT; then
   _report_cache ~/.cache/torch                                                           "PyTorch hub"          "--models"
   _report_cache ~/nltk_data                                                              "NLTK corpora"         "--models"
   _report_cache ~/Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw       "Docker disk image"    "manual (see --deep)"
+  # VM / container disk images under Application Support. Report-only, never auto-deleted:
+  # the extension is a reliable signal that a file is a runtime substrate, but nothing on
+  # disk says whether THIS one is disposable, so dehoard states the size and stops there.
+  # Covers apps no rule lists (Claude Desktop's claudevm.bundle, OrbStack, Lima, UTM, ...).
+  #   Scoped deliberately: this tree at depth 4 costs ~0.4s, while ~/Library/Containers
+  #   costs ~52s (796 sandboxed app containers), so Docker stays hardcoded above.
+  #   du, not ls: these are sparse. Docker.raw reads 1.0T apparent vs 8.4G real.
+  local _img _ikb
+  while IFS= read -r -d '' _img; do          # -print0/read -d '': "Application Support" has a space
+    _ikb=$(du -sk "$_img" 2>/dev/null | cut -f1)
+    (( ${_ikb:-0} >= 512000 )) || continue   # 500 MB floor, same spirit as the 5 MB Electron floor
+    # Label with the owning APP (first component under Application Support), not the
+    # immediate parent: "Claude" is actionable, "vm_bundles" is not.
+    local _rel="${_img#$HOME/Library/Application Support/}"
+    printf "  %-7s %-30s %s\n" "$(du -sh "$_img" 2>/dev/null | cut -f1)" \
+      "${${_rel%%/*}:-VM} disk image" "manual (report only)"
+  done < <(find ~/"Library/Application Support" -maxdepth 4 -type f \
+             \( -name '*.img' -o -name '*.img.zst' -o -name '*.raw' -o -name '*.qcow2' \
+                -o -name '*.vmdk' -o -name '*.vdi' \) -print0 2>/dev/null)
   # Generic sweep: biggest entries in the XDG + macOS cache roots over 100 MB.
   # NOTE: loop var must NOT be named 'path', in zsh that is tied to $PATH and
   # reading into it clobbers the command search path.
@@ -1384,6 +1504,7 @@ if $REPORT; then
         _json_models+=( "{\"tool\":$(_json_str "$_ff[1]"),\"name\":$(_json_str "$_ff[2]"),\"family\":$(_json_str "$_k"),\"quant\":$(_json_str_or_null "$_ff[4]"),\"variant\":$(_json_str "$_ff[5]"),\"size_bytes\":$(( _ff[3] * 1024 )),\"path\":$(_json_str_or_null "${_ff[6]:-}")}" )
       done
     done
+    {
     printf '{\n'
     printf '  "schema_version": 1,\n'
     printf '  "generated_by": "dehoard",\n'
@@ -1391,8 +1512,13 @@ if $REPORT; then
     printf '  "models": [%s],\n' "${(j:,:)_json_models}"
     printf '  "cross_tool_duplicates": [%s],\n' "${(j:,:)_json_dups}"
     printf '  "related_variants": [%s],\n' "${(j:,:)_json_rels}"
-    printf '  "total_reclaim_bytes": %d\n' "$(( _dup_reclaim_kb * 1024 ))"
+    printf '  "total_reclaim_bytes": %d,\n' "$(( _dup_reclaim_kb * 1024 ))"
+    # Additive field (no schema_version bump; existing consumers are unaffected). Bytes locked in
+    # deleted-but-still-open files: NOT reclaimable by dehoard, and the reason df can disagree with
+    # any tally. 0 when nothing is held or lsof is unavailable.
+    printf '  "held_open_deleted_bytes": %d\n' "$(_held_open_total_bytes)"
     printf '}\n'
+    } | _snapshot_sink
     exit 0
   fi
   if $_dup_found; then
@@ -2097,7 +2223,11 @@ if $SCAN; then
     for s in $stale; do
       [[ -d "$ext_dir/$s" ]] || continue
       on_disk+=("$s")
-      ext_kb=$(( ext_kb + $(du -sk "$ext_dir/$s" 2>/dev/null | cut -f1) ))
+      # du can print nothing (path raced away mid-scan, unreadable). Inlining the
+      # substitution would expand to `$(( ext_kb + ))` and abort the whole run with
+      # "bad math expression"; a two-step read makes the empty case a plain 0.
+      local _ekb; _ekb=$(du -sk "$ext_dir/$s" 2>/dev/null | cut -f1)
+      ext_kb=$(( ext_kb + ${_ekb:-0} ))
     done
     (( ${#on_disk[@]} )) || continue
     if $_COLLECT; then
@@ -2582,7 +2712,12 @@ if $SCAN; then
       _targets=(); local _akb=0
       for _sub in $_chrome_caches; do
         [[ -d "$_app/$_sub" ]] || continue
-        _targets+=("$_app/$_sub"); _akb=$(( _akb + $(du -sk "$_app/$_sub" 2>/dev/null | cut -f1) ))
+        # Two-step read, not an inline $( ) inside $(( )): a running Electron app
+        # rotates cache dirs mid-sweep, du then prints nothing, and the inline form
+        # aborts the entire run with "bad math expression". Empty reads as 0 here.
+        _targets+=("$_app/$_sub")
+        local _skb; _skb=$(du -sk "$_app/$_sub" 2>/dev/null | cut -f1)
+        _akb=$(( _akb + ${_skb:-0} ))
       done
       (( ${#_targets[@]} && _akb >= 5120 )) || continue        # skip apps with <5 MB cache
       AITOOL_FOUND=true
@@ -2720,9 +2855,18 @@ else
     echo "$(c_dim "🗑️  Nothing deleted.")"
   fi
   echo "$(c_dim "💾 Free space now: $(df -h / | awk 'NR==2 {print $4}') (whole disk; varies with other activity)")"
+  _warn_held_open      # explains a free-space figure that looks wrong; never suggests killing anything
   echo "$(c_dim "━━━━━━━━━━━━━━━━━━━━━━━━")"
-  command -v osascript &>/dev/null && \
-    osascript -e "display notification \"Freed ${FREED_MB} MB, $(df -h / | awk 'NR==2 {print $4}') free\" with title \"dehoard ✅\"" 2>/dev/null
+  # Notify only when something was ACTUALLY freed. A "Freed 0 MB" banner is pure noise,
+  # and hardcoding MB mis-reported KB-sized deletes as 0 too; mirror the units printed above.
+  if (( _FREED_KB > 0 )) && command -v osascript &>/dev/null; then
+    local _notify_amt
+    if   (( FREED_MB >= 1024 )); then _notify_amt="${FREED_GB} GB"
+    elif (( FREED_MB > 0 ));     then _notify_amt="${FREED_MB} MB"
+    else                              _notify_amt="${_FREED_KB} KB"
+    fi
+    osascript -e "display notification \"Freed ${_notify_amt}, $(df -h / | awk 'NR==2 {print $4}') free\" with title \"dehoard ✅\"" 2>/dev/null
+  fi
 fi
 }
 

@@ -16,6 +16,14 @@ set -u
 SCRIPT="${0:A:h}/../dehoard.sh"
 [[ -f "$SCRIPT" ]] || { echo "cannot find dehoard.sh next to test/"; exit 2; }
 SAFE_PATH="/usr/bin:/bin:/usr/sbin:/sbin"   # excludes brew/npm/go/uv/cargo → guards skip them
+# Neutralise osascript for EVERY test, not just the stub-harness ones. It lives in /usr/bin,
+# which SAFE_PATH includes, so without this each run reaching print_result posts a real macOS
+# notification and one suite floods the developer's Notification Center with fixture figures.
+_NOTIFY_STUB=$(mktemp -d)
+{ echo '#!/bin/sh'; echo 'exit 0'; } > "$_NOTIFY_STUB/osascript"
+chmod +x "$_NOTIFY_STUB/osascript"
+SAFE_PATH="$_NOTIFY_STUB:$SAFE_PATH"
+trap 'rm -rf "$_NOTIFY_STUB"' EXIT INT TERM
 
 PASS=0 FAIL=0
 ok()  { print -P "  %F{green}✓%f $1"; (( ++PASS )); return 0; }
@@ -42,7 +50,10 @@ run() { HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" "$@" >/dev/null 2>&1; }
 # the system or hang on a password prompt.
 make_stubs() {  # $1 = dir
   local d="$1" c; mkdir -p "$d"
-  for c in brew npm pnpm yarn bun uv trunk pip pip3 docker ollama git xcrun sudo tmutil conda sdkmanager cargo gradle mvn; do
+  # osascript is stubbed for the same reason as the rest: without it every run that
+  # reaches print_result posts a REAL macOS notification, so one suite spams the
+  # developer's Notification Center ~100 times with fixture-sized figures.
+  for c in brew npm pnpm yarn bun uv trunk pip pip3 docker ollama git xcrun sudo tmutil conda sdkmanager cargo gradle mvn osascript; do
     { echo '#!/bin/sh'
       echo 'printf "%s %s\n" "$(basename "$0")" "$*" >> "$STUB_LOG"'
       echo 'exit 0'; } > "$d/$c"
@@ -259,10 +270,109 @@ if command -v python3 >/dev/null 2>&1; then
   HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --json >/dev/null 2>&1
   after=$(find "$FIX" -type f | wc -l | tr -d ' ')
   [[ "$before" == "$after" ]] && ok "--json is read-only (deletes nothing)" || bad "--json deleted files!"
+
+  # A typo'd flag must not corrupt the --json data contract. The unknown-flag warning used to
+  # go to stdout, so `dehoard --json --typo` emitted a warning line + JSON and failed to parse.
+  HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --json --nosuchflag 2>/dev/null | python3 -m json.tool >/dev/null 2>&1 \
+    && ok "unknown-flag warning goes to stderr, --json stays parseable" \
+    || bad "unknown flag polluted --json stdout"
+
+  # --snapshot: archives the document AND leaves stdout pure JSON (so piping still works).
+  snapout=$(HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --snapshot 2>/dev/null)
+  print -r -- "$snapout" | python3 -m json.tool >/dev/null 2>&1 \
+    && ok "--snapshot keeps stdout pure JSON (still pipeable)" \
+    || bad "--snapshot polluted stdout"
+  snapfiles=("$FIX"/.cache/dehoard/snapshots/*.json(N))
+  (( ${#snapfiles[@]} == 1 )) && python3 -m json.tool < "${snapfiles[1]}" >/dev/null 2>&1 \
+    && ok "--snapshot archives one valid JSON document under \$XDG_CACHE_HOME" \
+    || bad "--snapshot did not archive a valid document"
+
+  # --json alone must NOT archive anything (snapshotting is opt-in).
+  rm -rf "$FIX"/.cache/dehoard/snapshots
+  HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --json >/dev/null 2>&1
+  [[ ! -d "$FIX/.cache/dehoard/snapshots" ]] \
+    && ok "--json does not archive (snapshot is opt-in)" \
+    || bad "--json wrote a snapshot without being asked"
   rm -rf "$FIX"
 else
   ok "(skipped --json test: python3 not available to validate)"
 fi
+
+# Notification hygiene: a run that frees nothing must not post a macOS banner. "Freed 0 MB"
+# is pure noise, and the notify line used to sit outside the freed/not-freed branch.
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; LOG="$FIX/stub.log"
+make_stubs "$STUBDIR"
+mkdir -p "$FIX"/.ollama/models; echo weights > "$FIX/.ollama/models/llama"   # user data only, nothing to free
+HOME="$FIX" STUB_LOG="$LOG" PATH="$STUBDIR:$SAFE_PATH" zsh "$SCRIPT" --apply --yes >/dev/null 2>&1
+grep -q '^osascript ' "$LOG" 2>/dev/null \
+  && bad "notified despite freeing nothing (Freed 0 MB banner)" \
+  || ok "no notification when nothing was freed"
+rm -rf "$FIX"
+
+# Arithmetic-injection guard. zsh evaluates a variable's VALUE inside $(( )) recursively, and
+# arithmetic supports assignment — so a numeric env var set to `(DRY_RUN=0)` clobbers the flag
+# _rm branches on and silently turns a PREVIEW run into a real deletion. Regression: the victim
+# must survive, and dehoard must say it previewed.
+for _bad_var in DEHOARD_HELD_OPEN_MIN_GB CACHE_MIN_MB DEHOARD_PM_TIMEOUT; do
+  new_fixture
+  out=$(env "$_bad_var=(DRY_RUN=0)" HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" 2>&1)
+  if [[ -f "$FIX/.npm/_npx/x" && "$out" == *"Preview complete"* ]]; then
+    ok "arithmetic injection via \$$_bad_var cannot flip preview into delete"
+  else
+    bad "arithmetic injection via \$$_bad_var DELETED in preview mode"
+  fi
+  rm -rf "$FIX"
+done
+# A legitimate numeric override must still be honored (the guard must not reject valid input).
+new_fixture
+DEHOARD_HELD_OPEN_MIN_GB=20 HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --version >/dev/null 2>&1 \
+  && ok "numeric env-var override still accepted after the injection guard" \
+  || bad "injection guard rejects a valid numeric override"
+rm -rf "$FIX"
+
+# Held-open deleted inodes: a process sitting on deleted files keeps their blocks, so df
+# under-reports and dehoard's figure looks wrong for reasons dehoard did not cause. Stub lsof
+# in -F field mode (what the code parses) to fake one 26 GB holder, then one 0.43 GB holder.
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; LOG="$FIX/stub.log"
+make_stubs "$STUBDIR"
+_fake_lsof() {   # $1 = bytes held by the single fake process
+  { echo '#!/bin/sh'
+    echo 'printf "p4242\ncbloatd\nftxt\ns'"$1"'\nn/private/var/tmp/deleted.db\n"'
+    echo 'exit 0'; } > "$STUBDIR/lsof"
+  chmod +x "$STUBDIR/lsof"
+}
+_fake_lsof 27917287424        # 26 GB, well over the 5 GB per-process threshold
+out=$(HOME="$FIX" STUB_LOG="$LOG" PATH="$STUBDIR:$SAFE_PATH" zsh "$SCRIPT" --report 2>/dev/null)
+[[ "$out" == *"26.0 GB is held by deleted files"* && "$out" == *"bloatd (pid 4242)"* ]] \
+  && ok "held-open: 26 GB holder is reported with size and process" \
+  || bad "held-open warning missing or malformed"
+# ...and it must never tell the user to kill anything; naming the process is where dehoard stops.
+[[ "$out" != *"kill"* ]] \
+  && ok "held-open: warns and names the process, never suggests killing it" \
+  || bad "held-open warning suggests killing a process"
+_fake_lsof 461373440          # 0.43 GB, ordinary macOS churn, must stay silent
+out=$(HOME="$FIX" STUB_LOG="$LOG" PATH="$STUBDIR:$SAFE_PATH" zsh "$SCRIPT" --report 2>/dev/null)
+[[ "$out" != *"held by deleted files"* ]] \
+  && ok "held-open: sub-threshold holder (0.43 GB) stays silent (no false alarm)" \
+  || bad "held-open fired below threshold"
+# --json must stay pure even when the warning is active (the warning is human-output only).
+_fake_lsof 27917287424
+HOME="$FIX" STUB_LOG="$LOG" PATH="$STUBDIR:$SAFE_PATH" zsh "$SCRIPT" --json 2>/dev/null \
+  | python3 -m json.tool >/dev/null 2>&1 \
+  && ok "held-open warning never leaks into --json stdout" \
+  || bad "held-open warning polluted --json"
+# --json carries the figure as DATA, unthresholded: a machine consumer reconciles df itself.
+HOME="$FIX" STUB_LOG="$LOG" PATH="$STUBDIR:$SAFE_PATH" zsh "$SCRIPT" --json 2>/dev/null \
+  | python3 -c 'import json,sys; assert json.load(sys.stdin)["held_open_deleted_bytes"]==27917287424' 2>/dev/null \
+  && ok "--json reports held_open_deleted_bytes exactly" \
+  || bad "--json held_open_deleted_bytes wrong or missing"
+# Sub-threshold: silent for humans, but still reported as data for machines.
+_fake_lsof 461373440
+HOME="$FIX" STUB_LOG="$LOG" PATH="$STUBDIR:$SAFE_PATH" zsh "$SCRIPT" --json 2>/dev/null \
+  | python3 -c 'import json,sys; assert json.load(sys.stdin)["held_open_deleted_bytes"]==461373440' 2>/dev/null \
+  && ok "--json reports held-open bytes even below the human warning threshold" \
+  || bad "--json suppressed sub-threshold held-open bytes"
+rm -rf "$FIX"
 
 # 5l, Ollama enumeration: 2+ models must NOT leak `onm=…` into stdout (regression: bare local-in-loop)
 if command -v python3 >/dev/null 2>&1; then
@@ -299,6 +409,24 @@ out=$(HOME="$FIX" PATH="$SAFE_PATH" zsh -c '
   && ok "_rm fails closed on unset \$DRY_RUN (refuses; whitelisted victim survives)" \
   || bad "_rm did NOT fail closed on unset DRY_RUN: [$out] victim-exists=$([[ -f $FIX/victim ]] && echo yes || echo NO)"
 rm -rf "$FIX"
+
+# 5m-bis, _rm fails closed on a CORRUPTED $DRY_RUN, not merely an unset one. $DRY_RUN is used as a
+# boolean COMMAND (`if $DRY_RUN`), so a value like `0` is not a false-y flag: it runs a bogus
+# command, fails, and falls through to the DELETE branch. An is-it-empty check passes such a value
+# straight through, so the guard demands one of the two legal values.
+for _bad_flag in 0 1 "" "TRUE" "yes"; do
+  FIX=$(mktemp -d); echo data > "$FIX/victim"
+  out=$(HOME="$FIX" PATH="$SAFE_PATH" DRY_RUN="$_bad_flag" zsh -c '
+    LOGFILE=""
+    c_warn(){ printf "%s" "$*"; }; c_dim(){ printf "%s" "$*"; }
+    '"$(sed -n "/^_rm() {/,/^}/p" "$SCRIPT")"'
+    _rm "'"$FIX"'/victim" 2>&1; echo "rc=$?"
+  ')
+  [[ "$out" == *"failing closed"* && "$out" == *"rc=1"* && -f "$FIX/victim" ]] \
+    && ok "_rm fails closed on corrupted \$DRY_RUN='$_bad_flag' (victim survives)" \
+    || bad "_rm did NOT fail closed on \$DRY_RUN='$_bad_flag': [$out]"
+  rm -rf "$FIX"
+done
 
 # 5n, --help frozen against golden snapshot (catches help drift / heredoc breakage post-refactor)
 if [[ -f "${0:A:h}/snapshots/help.txt" ]]; then

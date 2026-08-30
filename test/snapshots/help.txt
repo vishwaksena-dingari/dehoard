@@ -25,6 +25,10 @@ FLAGS
   --report        read-only audit; never deletes
   --json          machine-readable model inventory (implies --report; pure JSON on stdout)
                   e.g. dehoard --json | jq '.cross_tool_duplicates'
+  --snapshot      same as --json, and also archives the document to
+                  ~/.cache/dehoard/snapshots/<UTC-timestamp>.json. Run it on a schedule to
+                  see what regrew between two dates:
+                    diff <(jq -S . old.json) <(jq -S . new.json)
   --list-ignored       show paths you've marked 'always skip'
   --unignore <path>    remove one path from the always-skip list
   --reset-ignore       clear the entire always-skip list and re-prompt everything
@@ -210,10 +214,16 @@ TIER 2: Only with --deep. There is a real cost after deletion.
      Both are browser runtimes for automated testing.
      Restore: npx playwright install  /  npx puppeteer browsers install
 
- 10. Unavailable iOS simulators + CoreSimulator cache
-     Runs 'xcrun simctl delete unavailable' to remove simulator runtimes
-     for iOS versions you no longer have installed. Never deletes active
-     simulators. Also clears ~/Library/Developer/CoreSimulator/Caches.
+ 10. Unavailable iOS simulator devices + CoreSimulator cache
+     Runs 'xcrun simctl delete unavailable' to remove simulator DEVICES
+     whose runtime is no longer installed. Never deletes active simulators.
+     Also clears ~/Library/Developer/CoreSimulator/Caches.
+     Does NOT remove runtimes themselves. Runtimes are the big ones (tens of
+     GB) and Xcode silently reinstalls them on update. dehoard leaves them
+     alone because 'simctl runtime delete all' cannot be scoped to unused
+     ones or previewed per-item. To clear them yourself:
+       xcrun simctl runtime list          # see what is installed
+       xcrun simctl runtime delete all    # removes ALL, re-downloaded on demand
      No-op if Xcode / xcrun is not installed.
 
  10b. VSCode + Cursor Application Support caches

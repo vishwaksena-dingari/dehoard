@@ -140,11 +140,20 @@ sizes are integers (`size_bytes`), and unknown values are explicit `null`.
       "entries": [ { "tool": "LMStudio", "name": "…", "size_bytes": 6442450944, "quant": "q4", "variant": "instruct", "path": "…" } ]
     }
   ],
-  "total_reclaim_bytes": 8589934592
+  "total_reclaim_bytes": 8589934592,
+  "held_open_deleted_bytes": 1777313668
 }
 ```
 
 Field notes:
+
+- **`held_open_deleted_bytes`** is the total size of files that have been deleted but are still held
+  open by a running process. Those blocks stay allocated, so `df` under-reports free space until the
+  holding process exits. dehoard cannot reclaim them, and they are the main reason a reclaim tally
+  can disagree with `df`. Unthresholded (the human-facing warning uses a 5 GB per-process floor to
+  avoid crying wolf; a machine consumer wants the raw number). `0` if nothing is held or `lsof` is
+  unavailable. Added in v0.2.7 without a `schema_version` bump: it is additive, so existing consumers
+  are unaffected.
 
 - **`models[]`** lists one object per model copy for the cross-tool tools dehoard parses into a
   family/quant/variant key (HuggingFace, Ollama, LM Studio, PyTorch hub). Framework caches shown in

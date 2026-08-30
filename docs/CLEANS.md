@@ -33,9 +33,20 @@ Zero-consequence, regenerable junk:
 - **Xcode DerivedData** (compiled build products; source untouched).
 - **Docker**: `system prune` + `builder prune`; also reports the Docker/OrbStack/Colima disk-image
   size (those `.raw`/`.img` files never shrink on their own, reported, never auto-deleted).
+- **VM / container disk images under Application Support** (`.img`, `.img.zst`, `.raw`, `.qcow2`,
+  `.vmdk`, `.vdi` over 500 MB): **reported only, never deleted**. The extension reliably says a file
+  is a runtime substrate, but nothing on disk says whether *this* one is disposable, so dehoard
+  prints the size and stops. This is app-agnostic and covers tools no rule lists — Claude Desktop's
+  `claudevm.bundle` alone can hold ~21 GB. Sizes come from `du`, not `ls`: these files are sparse
+  (Docker's image reads 1.0 TB apparent vs 8.4 GB real). Scanned at depth 4, which costs ~0.4s;
+  `~/Library/Containers` is deliberately *not* crawled (≈800 sandboxed containers, ~52s), so Docker
+  stays individually listed above.
 - **HuggingFace cache** (`~/.cache/huggingface`), re-downloads on next use.
 - **Playwright / Puppeteer** browser binaries.
-- **Unavailable iOS simulators** + CoreSimulator caches.
+- **Unavailable iOS simulator devices** + CoreSimulator caches. Simulator *runtimes* are NOT
+  removed — they are the large ones (tens of GB, and Xcode silently reinstalls them on update),
+  but `simctl runtime delete all` cannot be scoped to unused runtimes or previewed per-item, so
+  dehoard reports and leaves them. Clear them yourself with `xcrun simctl runtime delete all`.
 - **VS Code, Cursor, and Discord caches** in Application Support (specific cache subfolders only;
   `User/` settings and storage are kept). *(The generic, app-agnostic Electron cache sweep lives
   in `--scan`, below.)*

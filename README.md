@@ -131,6 +131,7 @@ still passes the safe-root guard; environment managers (conda/uv/Android/Rust) u
 | `dehoard --scan` | Interactive scan of project artifacts (venvs, `node_modules`, build dirs, editor leftovers, orphaned tools). |
 | `dehoard --scan --pick --apply` | Same scan, but instead of prompting per item it opens **one `fzf` picker per category, biggest first** (a per-category summary of counts + sizes prints first as a contents page). In each category: TAB to mark, **Ctrl-A** all, **Ctrl-D** none, Enter to confirm, **Esc skips that category**; the preview shows last-modified, the recreate command, and any caveat. Interactive-only (skips the Tier 1 sweep); needs `fzf` and `--apply`; falls back to per-item prompts without `fzf`. |
 | `dehoard --json` | Machine-readable model inventory and duplicates as pure JSON on stdout. |
+| `dehoard --snapshot` | Same as `--json`, and also archives the document to `~/.cache/dehoard/snapshots/` so you can diff two dates and see what regrew. |
 | `dehoard --dry-run` | Force preview even with `--apply` (the safe default, made explicit). |
 | `dehoard --yes` / `-y` | Auto-confirm prompts. Combine with `--apply`; use with care. |
 | `dehoard --list-ignored` / `--unignore <path>` / `--reset-ignore` | Manage the always-skip ignore list. |
@@ -204,6 +205,77 @@ dehoard --json | jq '.models[] | select(.quant=="q4")' # every Q4 model on the m
 The schema is stable; `schema_version` only changes on a breaking change. It's documented in
 [docs/MODELS.md](docs/MODELS.md#json-schema).
 
+## Using dehoard from an agent
+
+There is no MCP server and there isn't going to be one. Any agent that can run a shell command
+already has everything: `dehoard --json` is one command, needs no install, no background process,
+and no tool schema sitting in the context window.
+
+The contract for an agent is exactly three rules:
+
+1. **`--json` is read-only.** It deletes nothing. Safe to run unattended.
+2. **stdout is pure JSON.** Warnings and progress go to stderr, so `dehoard --json 2>/dev/null`
+   always parses. `schema_version` is stable.
+3. **An agent must never call `--apply`.** The `_rm` whitelist stops *path bugs*; it cannot stop a
+   correctly-executed deletion that shouldn't have been chosen. Deletion is a human decision.
+
+## When `df` disagrees with the number
+
+A deleted file whose blocks are still allocated is invisible to every tool that walks the
+filesystem, because it no longer has a name. If a process still holds it open, the space is not
+returned until that process exits — so `df` can insist the disk is full while nothing on it accounts
+for the space. One process sitting on 26 GB of deleted files once cost the author eight hours of
+chasing a phantom.
+
+dehoard names it. When a single process holds **≥5 GB** in deleted files, `--report` and the summary
+after `--apply` say so, with the size and the process. It stops there: it does not offer to kill
+anything, because ending a running process is your call, not a cleaner's. `--json` carries the raw
+figure as `held_open_deleted_bytes`, unthresholded.
+
+The threshold is per-process, not a total — roughly 1.5 GB of held inodes is normal background churn
+on an idle Mac (plist caches, Spotlight, widgets), so a total-based limit would sit in the noise. If
+your machine legitimately holds more (Docker, a local database, a long-lived browser), raise it:
+
+```sh
+DEHOARD_HELD_OPEN_MIN_GB=20 dehoard --report
+```
+
+This does not turn dehoard's reclaim figure into a `df` delta. It still reports what it actually
+deleted; a modest gap between that and `df` remains normal.
+
+## `--snapshot`: seeing what regrew
+
+Reclaimed space has a half-life. Build caches come back — a `cargo target/` tree can rebuild to
+tens of GB in under a week — and the usual failure is not missing coverage but that nobody ran
+the tool.
+
+`dehoard --snapshot` behaves exactly like `--json` and additionally archives the document to
+`~/.cache/dehoard/snapshots/<UTC-timestamp>.json`. Collecting is cheap; skipping it is
+unrecoverable, because you cannot go back and measure last month. Comparing two is just:
+
+```sh
+diff <(jq -S . ~/.cache/dehoard/snapshots/old.json) \
+     <(jq -S . ~/.cache/dehoard/snapshots/new.json)
+```
+
+To run it weekly, save this as `~/Library/LaunchAgents/com.dehoard.snapshot.plist` and load it with
+`launchctl load ~/Library/LaunchAgents/com.dehoard.snapshot.plist`. It only ever reads:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>            <string>com.dehoard.snapshot</string>
+  <key>ProgramArguments</key> <array>
+    <string>/bin/zsh</string><string>-lc</string><string>dehoard --snapshot &gt;/dev/null</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict><key>Weekday</key><integer>0</integer><key>Hour</key><integer>10</integer></dict>
+</dict>
+</plist>
+```
+
 ## What it cleans
 
 A short map. The full per-item list, with the reason each item is safe to remove, is in
@@ -237,6 +309,7 @@ Set via environment variables, for example in `~/.zshrc`:
 | `DEHOARD_IGNORE_ENABLED` | `true` | `false` disables the ignore list entirely (no "Always skip?" prompts; the file is never written or read). |
 | `CACHE_MIN_MB` | `100` | Minimum size in MB for a cache dir to appear in the generic sweep. |
 | `DEHOARD_PM_TIMEOUT` | `120` | Seconds before a single external package-manager cleanup (brew/npm/yarn/trunk/…) is timed out and skipped, so one hung tool can't freeze the run. |
+| `DEHOARD_HELD_OPEN_MIN_GB` | `5` | Per-process floor before dehoard reports a process holding deleted-but-open files. Raise it if your machine legitimately holds more (Docker, a local database, a long-lived browser). |
 | `NO_COLOR` | unset | Set to any value to disable terminal color ([no-color.org](https://no-color.org)). Color is also off when stdout isn't a TTY (e.g. piped), and never appears in `--json` or the deletion log. |
 | `CLICOLOR_FORCE` | unset | Set to `1` to force color even when stdout isn't a TTY. `--json` stays pure JSON regardless. |
 

@@ -3,6 +3,112 @@
 All notable changes to `dehoard` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [0.2.7]: 2026-08-29
+
+### Security
+- **A hostile numeric env var could have turned a preview run into a real deletion.** Caught in
+  pre-release review; **no released version was exploitable** (see below). zsh evaluates a
+  variable's *value* inside an arithmetic context, recursively, and zsh arithmetic supports
+  assignment — so a value like `(DRY_RUN=0)` does not merely produce a wrong number, it assigns to
+  `DRY_RUN`, the flag `_rm` branches on to choose preview vs delete. `$DRY_RUN` then holds `0`,
+  which is neither `true` nor `false`: `if $DRY_RUN` tries to run a command named `0`, fails, and
+  falls through to the delete branch — so a run the user believed was a preview would delete for
+  real.
+
+  Scope, verified against the released v0.2.6 rather than assumed:
+  - `DEHOARD_HELD_OPEN_MIN_GB` — **introduced and fixed within this unreleased version.** Evaluated
+    at top level, so the assignment propagated. Exploitable end-to-end; never shipped.
+  - `CACHE_MIN_MB` — shipped since early versions, but **not** exploitable: one use site sits inside
+    a `du … | while read` pipeline and the other inside a `$( … )` command substitution, both of
+    which zsh runs in a subshell, so the assignment died with the subshell.
+  - `DEHOARD_PM_TIMEOUT` — shipped, and its arithmetic (`maxticks=$(( secs * 5 ))`) *is* in plain
+    function scope, but `_pm_run` is only called from the `else` branch of `if $DRY_RUN`, i.e. only
+    under `--apply`, where deletion is already authorized. Not exploitable.
+
+  Containment in the two shipped cases was incidental — a consequence of where the code happened to
+  sit, not a designed guard — so all numeric env vars are now validated as bare non-negative
+  integers at their definition sites, before any of them reaches an arithmetic context. A
+  non-numeric value is reported on stderr and replaced with the documented default.
+- **`_rm` now fails closed on a *corrupted* `$DRY_RUN`, not only an unset one.** The guard previously
+  asked whether the flag was empty. But `$DRY_RUN` is used as a boolean *command* (`if $DRY_RUN`), so
+  a value like `0` is not false-y — the shell runs a command named `0`, it fails, and control falls
+  through to the delete branch. An is-it-empty check passes such a value straight through. `_rm` now
+  requires exactly `true` or `false` and refuses anything else. This is defense in depth behind the
+  env-var validation above: the first closes the known routes into that state, this closes the state
+  itself, including from a route nobody has found yet.
+
+### Fixed
+- **A run no longer aborts when `du` returns nothing.** Two sites summed sizes with a command
+  substitution *inside* an arithmetic expansion (`$(( kb + $(du -sk …) ))`). When `du` printed
+  nothing — a path racing away mid-scan, or an unreadable directory — this expanded to `$(( kb + ))`
+  and killed the whole run with `bad math expression`. One of the two sites was inside the generic
+  Electron cache sweep, which walks every directory in `Application Support`, so a running app
+  rotating its own cache dirs could abort the run, with an error pointing nowhere near the cause.
+  Both now read into a variable first, where an empty result is a plain `0`.
+- **The unknown-flag warning went to stdout, corrupting `--json`.** `dehoard --json --typo` emitted a
+  warning line ahead of the document, so it failed to parse. Warnings now go to stderr, keeping the
+  stdout data contract pure.
+- **No more "Freed 0 MB" notifications.** The macOS notification fired at the end of every completed
+  run, including runs that deleted nothing, and it hardcoded MB — so a KB-sized delete was also
+  announced as `0 MB`. It now fires only when something was actually freed, and reports the same
+  unit shown in the terminal.
+- **The test suite no longer posts real macOS notifications.** `osascript` was the one external tool
+  the harness never stubbed, so a single `zsh test/run.zsh` flooded the developer's Notification
+  Center with ~100 banners full of throwaway fixture figures.
+- **Corrected a false claim in `--help`.** Item 10 said `xcrun simctl delete unavailable` "remove[s]
+  simulator runtimes". It does not — it removes *devices*. Runtimes are the ones worth tens of GB and
+  Xcode silently reinstalls them on update. dehoard deliberately does not touch them (`simctl runtime
+  delete all` can be neither scoped to unused runtimes nor previewed per-item, which its
+  preview-first contract requires), and now says so, with the manual command.
+
+### Added
+- **`--snapshot`**: behaves exactly like `--json` and additionally archives the document to
+  `~/.cache/dehoard/snapshots/<UTC-timestamp>.json`. stdout stays pure JSON, so pipelines are
+  unaffected, and `--json` alone never writes anything. Reclaimed space has a half-life; this makes
+  regrowth measurable after the fact. Diffing two snapshots is left to `jq` on purpose — no new
+  schema contract is introduced. README documents a weekly `launchd` plist.
+- **VM / container disk images under `Application Support` are reported** (`.img`, `.img.zst`,
+  `.raw`, `.qcow2`, `.vmdk`, `.vdi` over 500 MB), report-only and never deleted. App-agnostic, so it
+  covers tools no rule lists — Claude Desktop's `claudevm.bundle` alone can hold ~21 GB. Sizes use
+  `du`, not `ls`, because these files are sparse (Docker's image reads 1.0 TB apparent vs 8.4 GB
+  real). Scanned at depth 4 (~0.4s); `~/Library/Containers` is deliberately not crawled (≈800
+  sandboxed containers, ~52s), so Docker keeps its individual entry.
+- **Held-open deleted files are now reported.** When a process holds a file that has been deleted,
+  its blocks stay allocated and `df` under-reports free space until that process exits — so
+  dehoard's figure can look wrong for a reason dehoard did not cause. A process sitting on ≥5 GB is
+  named in `--report` and after `--apply`. It states the fact and stops: it never suggests killing
+  anything, because deciding to end a process is the user's call, not a cleaner's. The threshold is
+  per-process, not total, because ~1.5 GB of ambient held inodes (plist caches, Spotlight, widgets)
+  is normal on an idle Mac; measured noisiest ordinary process was 0.43 GB, giving ~11x headroom.
+  `lsof` is invoked as `lsof -bnP -Fpcsn +L1`: `-b` so a stale NFS/SMB mount cannot hang the run,
+  and `-F` field mode so sizes are read by tag rather than column position (in the plain table `$7`
+  is SIZE/OFF and `$8` is NLINK, and filtering the wrong one silently matches nothing while looking
+  correct). Note there is no `-u $USER`: lsof ORs selection flags unless `-a` is given, so
+  `-u $USER +L1` would mean "this user's files OR deleted-open files" — 26x more rows.
+  This does **not** change the reclaim tally into a `df` delta; a modest tally-vs-`df` gap remains
+  normal and expected. The threshold is tunable via `DEHOARD_HELD_OPEN_MIN_GB` (default `5`),
+  alongside the existing knobs, because it was calibrated on an idle developer Mac and a machine
+  running Docker, a database, or a long-lived browser can legitimately hold far more.
+- **`held_open_deleted_bytes` in `--json`** (additive; `schema_version` unchanged, existing
+  consumers unaffected). Unthresholded, unlike the human warning: a machine consumer wants the raw
+  figure to reconcile against `df` itself. `0` when nothing is held or `lsof` is unavailable.
+- **README: "Using dehoard from an agent."** `dehoard --json` already gives any shell-capable agent
+  the full inventory with no install, no daemon, and no tool schema in the context window, so there
+  is no MCP server. Documents the three rules: `--json` is read-only, stdout is pure JSON, and an
+  agent must never call `--apply` — the `_rm` whitelist stops path bugs, not a correctly-executed
+  deletion that should not have been chosen.
+
+### Tests
+- 124 assertions (was 104). New coverage: a typo'd flag cannot corrupt `--json`; `--snapshot` keeps
+  stdout pipeable and archives exactly one valid document; `--json` alone never archives; a run that
+  frees nothing posts no notification; and `lsof` is stubbed in `-F` field mode to fake a 26 GB
+  holder — asserting it is named with its size, that the wording never suggests killing it, that a
+  0.43 GB holder stays silent, that the warning never leaks into `--json` stdout, and that
+  `held_open_deleted_bytes` is reported exactly both above and below the human threshold. Plus the
+  arithmetic-injection regression: each of the three numeric env vars, set to `(DRY_RUN=0)`, must
+  leave the victim file intact and still report a preview — and a valid numeric override must still
+  be accepted. Each was verified to fail against the unfixed code.
+
 ## [0.2.6]: 2026-06-04
 
 ### Fixed

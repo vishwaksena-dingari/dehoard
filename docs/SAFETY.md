@@ -80,11 +80,27 @@ flowchart TD
 ```
 
 **Fail-closed precondition.** The very first thing `_rm` checks is that its safety state (`$DRY_RUN`)
-is set. If it is somehow unset or empty, the failure a refactoring bug could introduce by
-accidentally scoping a global to a function, `_rm` **refuses and deletes nothing** rather than
-risk treating "unset" as "not a preview." Safe by default, even against its own future bugs. (A test
-asserts this: with `$DRY_RUN` unset, `_rm` refuses even a path that is otherwise inside the safe
-roots.)
+holds one of exactly two legal values, `true` or `false`. Anything else — unset, empty, or corrupted
+— makes `_rm` **refuse and delete nothing** rather than risk treating a broken flag as "not a
+preview." Safe by default, even against its own future bugs. (Tests assert this for an unset flag
+and for the values `0`, `1`, `""`, `TRUE`, and `yes`; in each case `_rm` refuses a path that is
+otherwise inside the safe roots.)
+
+Checking only for *unset* would not be enough, and the reason is worth stating because it is
+counter-intuitive. `$DRY_RUN` is used as a boolean **command** (`if $DRY_RUN; then …`), not as a
+string compared to `"true"`. So a value of `0` is not a false-y flag: the shell tries to run a
+command named `0`, fails, and control falls through to the **delete** branch. A corrupted flag that
+merely *looks* false therefore deletes, and an is-it-empty check waves it straight through.
+
+**Numeric environment variables are validated before use.** `CACHE_MIN_MB`, `DEHOARD_PM_TIMEOUT`,
+and `DEHOARD_HELD_OPEN_MIN_GB` must be bare non-negative integers; a non-numeric value is reported
+on stderr and replaced with its documented default. This is a safety guard rather than input
+hygiene. zsh evaluates a variable's *value* inside an arithmetic context, recursively, and zsh
+arithmetic supports assignment — so `SOME_NUMERIC_VAR='(DRY_RUN=0)'` would not produce a wrong
+number, it would assign to `DRY_RUN` and, per the paragraph above, flip a preview into a real
+deletion. Validating at the boundary and demanding a legal flag at the chokepoint are deliberately
+*both* in place: the first closes the known routes, the second makes the whole class unreachable
+even from a route nobody has thought of yet.
 
 Why a central guard matters: dehoard has dozens of cleanup rules across many tools. If each one
 called `rm` directly, a single bad glob or a mis-computed temp path (for example, `$TMPDIR` being
@@ -135,7 +151,10 @@ among other things, that:
   even under `--apply --yes`, it never runs the Tier 1 batch sweep, and an env-manager item is removed
   through its native uninstaller (falling back to `_rm` if that tool is absent);
 - "Storage freed" reflects what was actually deleted: deleting nothing reports zero, a real delete
-  reports the removed size.
+  reports the removed size, and a run that freed nothing posts no desktop notification;
+- `_rm` fails closed on a `$DRY_RUN` that is unset *or* corrupted (`0`, `1`, `""`, `TRUE`, `yes`);
+- a numeric env var set to an arithmetic-assignment payload (`(DRY_RUN=0)`) cannot flip a preview
+  into a real deletion, while a legitimate numeric override is still honored.
 
 If a change breaks any of these, CI fails. That suite is the real safety contract; this page is its
 human-readable summary.

@@ -39,7 +39,7 @@ main "$@"
 Each cleanup function self-guards on its flag, so the dispatch reads top-to-bottom in execution
 order. `--pick` is interactive-only, so `main()` skips the
 batch cleaners and runs only `run_scan`, whose candidates go into one `fzf` picker per category
-(biggest first) instead of the automatic Tier 1 sweep. The ~480-line `--help` text lives in a single `usage()` heredoc rather than hundreds of
+(biggest first) instead of the automatic Tier 1 sweep. The ~500-line `--help` text lives in a single `usage()` heredoc rather than hundreds of
 `echo` statements, so it never buries the logic. Every path dehoard removes itself still routes
 through the one `_rm` primitive (below); the function split changes organization, never the deletion
 contract. (The sole delegation is `--scan --pick` handing an environment to its native manager,
