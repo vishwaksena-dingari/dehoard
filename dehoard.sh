@@ -38,6 +38,12 @@ GIT_GC_ROOTS=(~/Documents ~/src ~/Desktop ~/Developer "${EXTRA_SCAN_DIRS[@]}")
 # appear, the ignore file will never be written, and any existing file is ignored.
 # Useful if you want a fully stateless tool or manage exclusions another way.
 : ${DEHOARD_IGNORE_ENABLED:=true}
+# Compared, never executed. `if $_IGNORE_ON && …` would RUN the value as a
+# command, so `DEHOARD_IGNORE_ENABLED=/some/prog` executes that program. Same class as the numeric
+# arithmetic issue this release fixes, and the same treatment DEHOARD_APPLY_DEFAULT already gets:
+# collapse the knob to one internal boolean here, and test that everywhere else.
+if [[ "$DEHOARD_IGNORE_ENABLED" == true ]]; then _IGNORE_ON=true; else _IGNORE_ON=false; fi
+typeset -r _IGNORE_ON
 # Numeric env vars are validated as literal integers before ANY of them reaches a `$(( ))`
 # or `(( ))` context. This is a safety guard, not input hygiene: zsh evaluates a variable's
 # VALUE inside an arithmetic context, recursively, and arithmetic supports assignment. So a
@@ -747,7 +753,7 @@ if ! $REPORT; then
   fi
   # Surface the active ignore list upfront when the feature is enabled
   local _ign_startup="$_IGNORE_FILE"
-  if ${DEHOARD_IGNORE_ENABLED:-true} && [[ -f "$_ign_startup" ]]; then
+  if $_IGNORE_ON && [[ -f "$_ign_startup" ]]; then
     local _ign_n; _ign_n=$(wc -l < "$_ign_startup" | tr -d ' ')
     if (( _ign_n > 0 )); then
       printf "⊘  Ignore list active: %d path(s) will be skipped without prompting.\n" "$_ign_n"
@@ -778,7 +784,7 @@ BASE="${BASE:A}"              # canonicalize: resolve `..`/symlinks so a hostile
 # Load the ignore list ONCE so _rm honors it in every tier (not just interactive prompts).
 # Non-empty lines only; entries are absolute paths and may contain globs.
 _IGNORE_PATTERNS=()
-if ${DEHOARD_IGNORE_ENABLED:-true} && [[ -f "$_IGNORE_FILE" ]]; then
+if $_IGNORE_ON && [[ -f "$_IGNORE_FILE" ]]; then
   _IGNORE_PATTERNS=(${(f)"$(grep -v '^[[:space:]]*$' "$_IGNORE_FILE" 2>/dev/null)"})
 fi
 
@@ -796,7 +802,7 @@ _ask() {  # $1=question, $2=optional path for always-skip check
   local _ign="$_IGNORE_FILE"
   # Check ignore list, always announce the skip so nothing is hidden from the user.
   # Skipped entirely when DEHOARD_IGNORE_ENABLED=false (stateless mode).
-  if ${DEHOARD_IGNORE_ENABLED:-true} && [[ -n "$_sp" && -f "$_ign" ]] \
+  if $_IGNORE_ON && [[ -n "$_sp" && -f "$_ign" ]] \
      && grep -qxF "$_sp" "$_ign" 2>/dev/null; then
     printf "  ⊘ always-skip (%s)\n" "${_sp/#$HOME/~}"
     return 1
@@ -813,7 +819,7 @@ _ask() {  # $1=question, $2=optional path for always-skip check
     # point must not be quieter than --yes; RED stays reserved for the APPLY banner.
     read -q "REPLY?$(c_warn "$1") [y/N] "; echo
     # After a deliberate "no" in apply mode, offer always-skip, unless user disabled it
-    if [[ "$REPLY" != "y" && -n "$_sp" ]] && $APPLY && ${DEHOARD_IGNORE_ENABLED:-true}; then
+    if [[ "$REPLY" != "y" && -n "$_sp" ]] && $APPLY && $_IGNORE_ON; then
       read -q "SKIP_REPLY?    Always skip ${_sp/#$HOME/~}? [y/N] "; echo
       if [[ "$SKIP_REPLY" == "y" ]]; then
         mkdir -p "$_CONFIG_DIR"
@@ -1039,7 +1045,12 @@ _held_open_report() {               # echoes "<bytes>\t<command> (pid N)" for th
   # file's FULL size, so `exec 3<f; exec 4<f` (or any mapped-and-opened library) would otherwise be
   # counted twice. The blocks are held once. Requesting D and i is what makes that detectable; the
   # `n` (name) field was requested before and never read, so it is gone.
-  lsof -bnP -FpcsDi +L1 2>/dev/null | awk -v min="$_HELD_OPEN_MIN_BYTES" '
+  # Bounded with _run_timeout: `-b` prevents lsof BLOCKING on a stale NFS/SMB mount, but it does not
+  # bound the scan, which is linear in system-wide open file descriptors. Idle here is ~0.16s / 676
+  # records; a machine running Docker, a database and a long-lived browser is orders of magnitude
+  # more, and this runs on a plain no-flag run. On timeout the partial output simply under-reports,
+  # which is the safe direction for a warning that only ever explains a number.
+  _run_timeout 10 lsof -bnP -FpcsDi +L1 2>/dev/null | awk -v min="$_HELD_OPEN_MIN_BYTES" '
     /^p/ { pid = substr($0, 2); next }
     /^c/ { cmd = substr($0, 2); next }
     /^f/ { dev = ""; sz = ""; next }                 # new descriptor block, reset its fields
@@ -1060,7 +1071,7 @@ _held_open_total_bytes() {
   # processes yields 40 records of its full size, but occupies its blocks exactly ONCE. Summing
   # raw records inflates the figure by the sharing factor, and this number is presented as the
   # explanation for df disagreeing — an inflated one makes df look wrong when it is not.
-  lsof -bnP -FsDi +L1 2>/dev/null | awk '
+  _run_timeout 10 lsof -bnP -FsDi +L1 2>/dev/null | awk '
     /^f/ { dev = ""; sz = ""; next }
     /^D/ { dev = substr($0, 2); next }
     /^s/ { sz  = substr($0, 2); next }

@@ -334,6 +334,43 @@ for _bad_var in DEHOARD_HELD_OPEN_MIN_GB CACHE_MIN_MB DEHOARD_PM_TIMEOUT; do
   fi
   rm -rf "$FIX"
 done
+# ...and under --dry-run WITH --apply present, which is the path that actually reaches _pm_run.
+# DEHOARD_PM_TIMEOUT's arithmetic (`maxticks=$(( secs * 5 ))`) lives in plain function scope, not a
+# subshell, so this is the one variable whose clobber would propagate. The preview loop above never
+# reaches it: _pm_run is only called from the else-branch of `if $DRY_RUN`.
+for _bad_var in DEHOARD_PM_TIMEOUT CACHE_MIN_MB DEHOARD_HELD_OPEN_MIN_GB; do
+  new_fixture
+  out=$(env "$_bad_var=(DRY_RUN=0)" HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --apply --dry-run 2>&1)
+  if [[ -f "$FIX/.npm/_npx/x" && "$out" == *"Preview complete"* ]]; then
+    ok "arithmetic injection via \$$_bad_var cannot defeat --dry-run on the --apply path"
+  else
+    bad "arithmetic injection via \$$_bad_var DELETED despite --dry-run"
+  fi
+  rm -rf "$FIX"
+done
+
+# An empty `du` (path raced away mid-scan, or unreadable) must not abort the run. Stub `du` to
+# print nothing: before the two-step-read fix this expanded to `$(( kb + ))` and killed the run
+# with "bad math expression", leaving a partial clean and no tally.
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; LOG="$FIX/stub.log"
+make_stubs "$STUBDIR"
+mkdir -p "$FIX"/.npm/_npx; : > "$FIX/.npm/_npx/x"
+# The fixture MUST contain a directory the accumulate loop actually walks, or the test is vacuous:
+# both patched sites sit inside `[[ -d … ]] || continue` guards, so with an empty fixture the buggy
+# inline form is never evaluated and a reverted fix still "passes". This is an Electron-style cache
+# dir, which the generic Application Support sweep enumerates.
+mkdir -p "$FIX/Library/Application Support/FakeElectronApp/Cache"
+: > "$FIX/Library/Application Support/FakeElectronApp/Cache/blob"
+{ echo '#!/bin/sh'; echo 'exit 0'; } > "$STUBDIR/du"        # succeeds, prints nothing
+chmod +x "$STUBDIR/du"
+# --scan, not a bare run: the generic Electron cache sweep that contains the patched accumulate
+# only executes under --scan. Verified by reverting the fix and confirming this exact invocation
+# emits "bad math expression" while a bare run does not.
+out=$(HOME="$FIX" STUB_LOG="$LOG" PATH="$STUBDIR:$SAFE_PATH" zsh "$SCRIPT" --scan 2>&1)
+[[ "$out" != *"bad math expression"* ]] \
+  && ok "an empty du does not abort the --scan sweep (no 'bad math expression')" \
+  || bad "empty du aborted the run: [$(print -r -- "$out" | grep -m1 'bad math')]"
+rm -rf "$FIX"
 # A legitimate numeric override must still be honored (the guard must not reject valid input).
 # NOTE: this must NOT use --version. --version exits early, hundreds of lines before
 # _num_or_default runs, so such a test passes even against a guard that rejects every legal
