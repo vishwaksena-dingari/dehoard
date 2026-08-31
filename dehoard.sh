@@ -721,6 +721,10 @@ $DRY_RUN && APPLY=false                          # --dry-run beats everything, a
 # where a variable's value is evaluated recursively and assignment is legal) aborts the run loudly
 # instead of silently deleting. Fail closed at the source, not at one consumer.
 typeset -r DRY_RUN
+# Freeze TRASH_MODE for the same reason: `if $TRASH_MODE` EXECUTES the value, so an assignment
+# smuggled in later could both run a command and silently switch the deletion mode. This is the
+# one boolean-command global that 03edeb9 introduced without the guard the others already had.
+typeset -r TRASH_MODE
 
 # ── Semantic color (human-terminal only; never on a machine channel) ─────────
 # Enabled only when stdout is an interactive TTY, NO_COLOR is unset, and we are NOT
@@ -1056,7 +1060,7 @@ _rm() {
         # emptied. Counted separately from _FREED_KB for exactly that reason, and reported as
         # "moved" rather than "freed", so the headline number never claims space you don't have.
         if _mv_to_trash "$target"; then
-          echo "  trashed: ${target/#$HOME/~} (${_sz})"
+          print -r -- "  trashed: ${target/#$HOME/~} (${_sz})"
           (( _TRASHED_KB += _szk ))
           printf '%s\t%s\n' "TRASHED" "$target" >> "${LOGFILE:-/dev/null}" 2>/dev/null
           continue
@@ -1065,7 +1069,9 @@ _rm() {
         continue
       fi
       if rm -rf "$target" 2>>"${LOGFILE:-/dev/null}"; then
-        echo "  removed: ${target/#$HOME/~} (${_sz})"                  # human-visible: what was actually deleted
+        # print -r --: a path can contain backslash sequences that zsh's echo would expand into
+        # real control characters, letting a crafted filename rewrite this audit line.
+        print -r -- "  removed: ${target/#$HOME/~} (${_sz})"           # human-visible: what was actually deleted
         (( _FREED_KB += _szk ))                                        # count only what actually went
         [[ -n "$LOGFILE" ]] && printf '%s\t%s\n' "$_sz" "$target" >> "$LOGFILE"   # raw record (never colored)
       else
@@ -1850,7 +1856,10 @@ echo "$(c_step "Removing old installers from ~/Downloads (>30 days, >50 MB)...")
 # per-item prompt. .dmg/.pkg/.iso/.xip exist to carry software you have already installed, and are
 # re-downloadable by definition. -print0 so a filename with a space or newline cannot split.
 while IFS= read -r -d '' f; do
-    echo "  Removing: $(basename "$f") ($(du -sh "$f" 2>/dev/null | cut -f1))"
+    # print -r --, not echo: the filename comes from ~/Downloads and is chosen by whoever made the
+    # file. zsh's echo expands backslash sequences, so `payload\e[2Jevil.dmg` clears the terminal
+    # mid-run and scrolls away the record of what else was deleted.
+    print -r -- "  Removing: $(basename "$f") ($(du -sh "$f" 2>/dev/null | cut -f1))"
     _rm "$f"
 done < <(find ~/Downloads -maxdepth 1 -type f \
            \( -name '*.dmg' -o -name '*.pkg' -o -name '*.iso' -o -name '*.xip' \) \
