@@ -141,11 +141,21 @@ sizes are integers (`size_bytes`), and unknown values are explicit `null`.
     }
   ],
   "total_reclaim_bytes": 8589934592,
-  "held_open_deleted_bytes": 1777313668
+  "held_open_deleted_bytes": 1777313668,
+  "ollama_store_bytes": 41160000000,
+  "ollama_listed_bytes": 50610000000
 }
 ```
 
 Field notes:
+
+- **`ollama_store_bytes` / `ollama_listed_bytes`** — Ollama is **content-addressed**: models share
+  layer blobs, and `ollama list` reports each model's full logical size *including* layers it shares
+  with other models. Summing `models[].size_bytes` therefore over-counts what is on disk. Measured
+  on one real machine: 50.61 GB listed vs 41.16 GB actually stored, because a single base layer was
+  referenced by six models. **A consumer computing an Ollama total must use `ollama_store_bytes`.**
+  `size_bytes` on an individual model is its *logical* size, not what removing it would reclaim —
+  deleting one model frees only its unshared layers. Both fields are `0` when Ollama is absent.
 
 - **`held_open_deleted_bytes`** is the total size of files that have been deleted but are still held
   open by a running process. Those blocks stay allocated, so `df` under-reports free space until the

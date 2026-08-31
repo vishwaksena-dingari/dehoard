@@ -1574,6 +1574,30 @@ if $REPORT; then
       _mdl_add Ollama "$onm" "$okb"; _ollama_found=true
     done < <(ollama list 2>/dev/null)
     $_ollama_found || $JSON || echo "  (ollama installed but no models found, is the daemon running? try: ollama serve)"
+    # Ollama is CONTENT-ADDRESSED: models share layer blobs, and `ollama list` reports each model's
+    # full logical size including layers it shares with others. Summing those sizes therefore
+    # over-counts what is actually on disk — measured here at 50.6 GB claimed vs 38 GB real, a 33%
+    # gap, because one base layer was referenced by six models. The deletion path already knows this
+    # (it credits a measured before/after delta rather than a per-model figure); this makes the
+    # REPORT equally honest instead of quietly inflating the tool's headline number.
+    if $_ollama_found && [[ -d ~/.ollama/models ]]; then
+      # Sum the Ollama rows out of _mdl_list (entry = tool\tdisplay\tkb\tquant\tvariant\tpath).
+      local _oll_real_kb _oll_sum_kb=0 _ok _oline; local -a _of
+      _oll_real_kb=$(du -sk ~/.ollama/models 2>/dev/null | cut -f1)
+      for _ok in ${(k)_mdl_list}; do
+        for _oline in "${(@f)${_mdl_list[$_ok]%$'\n'}}"; do
+          _of=("${(@s:	:)_oline}")
+          [[ "${_of[1]}" == Ollama ]] && (( _oll_sum_kb += ${_of[3]:-0} ))
+        done
+      done
+      OLLAMA_STORE_KB=${_oll_real_kb:-0}
+      OLLAMA_SUM_KB=$_oll_sum_kb
+      if ! $JSON && (( ${_oll_real_kb:-0} > 0 && _oll_sum_kb > _oll_real_kb )); then
+        echo "$(c_dim "    ↳ listed sizes total $(( _oll_sum_kb / 1048576 )) GB, but the store is $(( _oll_real_kb / 1048576 )) GB on disk:")"
+        echo "$(c_dim "      $(( (_oll_sum_kb - _oll_real_kb) / 1048576 )) GB of layers are SHARED between models. Removing one model frees only its")"
+        echo "$(c_dim "      unshared layers, so treat per-model sizes as logical, not as reclaimable.")"
+      fi
+    fi
   fi
 
   # Split every cross-tool group into TRUE duplicates (same build → safe reclaim) vs
@@ -1634,7 +1658,12 @@ if $REPORT; then
     # Additive field (no schema_version bump; existing consumers are unaffected). Bytes locked in
     # deleted-but-still-open files: NOT reclaimable by dehoard, and the reason df can disagree with
     # any tally. 0 when nothing is held or lsof is unavailable.
-    printf '  "held_open_deleted_bytes": %d\n' "$(_held_open_total_bytes)"
+    printf '  "held_open_deleted_bytes": %d,\n' "$(_held_open_total_bytes)"
+    # Ollama is content-addressed, so per-model sizes in models[] include SHARED layers and their
+    # sum exceeds what is on disk. store_bytes is the measured truth; listed_bytes is that sum.
+    # A consumer computing a total must use store_bytes, not sum(models[].size_bytes).
+    printf '  "ollama_store_bytes": %d,\n'  "$(( ${OLLAMA_STORE_KB:-0} * 1024 ))"
+    printf '  "ollama_listed_bytes": %d\n'  "$(( ${OLLAMA_SUM_KB:-0} * 1024 ))"
     printf '}\n'
     } | _snapshot_sink
     exit 0
