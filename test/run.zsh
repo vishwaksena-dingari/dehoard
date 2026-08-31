@@ -19,6 +19,10 @@ SAFE_PATH="/usr/bin:/bin:/usr/sbin:/sbin"   # excludes brew/npm/go/uv/cargo → 
 # Neutralise osascript for EVERY test, not just the stub-harness ones. It lives in /usr/bin,
 # which SAFE_PATH includes, so without this each run reaching print_result posts a real macOS
 # notification and one suite floods the developer's Notification Center with fixture figures.
+# Captured BEFORE anything reassigns HOME/TMPDIR: the canary checks and _assert_sandbox both
+# compare against the developer's real environment, so these must be the untouched originals.
+_REAL_HOME="$HOME"
+_REAL_TMPDIR_ORIG="${TMPDIR:-/tmp}"
 _NOTIFY_STUB=$(mktemp -d)
 { echo '#!/bin/sh'; echo 'exit 0'; } > "$_NOTIFY_STUB/osascript"
 chmod +x "$_NOTIFY_STUB/osascript"
@@ -36,6 +40,22 @@ _FIXTURE_TMPDIR=$(mktemp -d)
 export TMPDIR="${_FIXTURE_TMPDIR%/}/"
 trap 'rm -rf "$_NOTIFY_STUB" "$_FIXTURE_TMPDIR"' EXIT INT TERM
 
+# Canaries in the REAL environment. _assert_sandbox is wired into run(), but only 2 of ~100
+# invocations use run() — wrapping the other 98 would be fragile and a newly-written test would
+# silently escape anyway. So instead of guarding each call site, assert the PROPERTY at the end:
+# nothing the suite ran deleted a real file. These live at paths dehoard's Tier 1 genuinely
+# targets, so a hermeticity regression destroys them and the final check fails loudly, whichever
+# invocation caused it — including ones that do not exist yet.
+# The canary must sit at a path Tier 1 ACTUALLY targets, not merely inside the real TMPDIR:
+# dehoard removes `${TMPDIR}hsperfdata_*` by glob, so a uniquely-suffixed name matches that glob
+# while never colliding with a real JVM perf dir. A canary nested one level deeper would survive a
+# genuine hermeticity break and prove nothing (the first version of this check made that mistake).
+_REAL_TMPDIR="${_REAL_TMPDIR_ORIG%/}/"
+_CANARY_TMP="${_REAL_TMPDIR}hsperfdata_dehoardsuitecanary"
+mkdir -p "$_CANARY_TMP" 2>/dev/null && : > "$_CANARY_TMP/probe"
+_CANARY_REAL_HOME_MARK="$_REAL_HOME/.dehoard-suite-canary"
+: > "$_CANARY_REAL_HOME_MARK" 2>/dev/null
+
 PASS=0 FAIL=0
 ok()  { print -P "  %F{green}✓%f $1"; (( ++PASS )); return 0; }
 bad() { print -P "  %F{red}✗ $1%f";   (( ++FAIL )); return 0; }
@@ -52,7 +72,6 @@ _assert_sandbox() {   # $1 = label of the about-to-run invocation
   [[ "${HOME}" != "${_REAL_HOME}" ]] \
     || { print -P "%F{red}FATAL: \$HOME is the REAL home — refusing to run $1%f"; exit 2; }
 }
-_REAL_HOME="$HOME"
 
 new_fixture() {
   FIX=$(mktemp -d)
@@ -1463,6 +1482,19 @@ rm -rf "$FIX"
 
 # 6, syntax
 zsh -n "$SCRIPT" && ok "zsh -n syntax clean" || bad "syntax error"
+
+# Hermeticity, asserted as a property rather than per call site: after the whole suite has run,
+# every canary planted in the REAL environment must still exist. A suite that deletes the
+# developer's or CI's actual files fails here regardless of which test did it.
+if [[ -f "$_CANARY_TMP/probe" ]]; then
+  ok "hermetic: the suite deleted nothing from the real TMPDIR (canaries intact)"
+else
+  bad "hermetic: the suite DELETED real files from $_REAL_TMPDIR — a test escaped its fixture"
+fi
+[[ -f "$_CANARY_REAL_HOME_MARK" ]] \
+  && ok "hermetic: the suite deleted nothing from the real \$HOME (canary intact)" \
+  || bad "hermetic: the suite DELETED a file in the real \$HOME"
+rm -rf "$_CANARY_TMP" "$_CANARY_REAL_HOME_MARK"
 
 echo ""
 print -P "%F{cyan}dehoard tests: ${PASS} passed, ${FAIL} failed%f"
