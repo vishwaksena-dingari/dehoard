@@ -405,6 +405,187 @@ out=$(DEHOARD_HELD_OPEN_MIN_GB="5.5" HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT"
   || bad "guard did not report a rejected non-integer: [$out]"
 rm -rf "$FIX"
 
+# ─────────────────────────────────────────────────────────────────────────────
+# --trash mode. This is a DELETION path, so it is covered in three layers:
+# broad end-to-end first, then the behavioural contracts that make the mode
+# safe, then atomic unit tests on _mv_to_trash extracted from the script.
+# Two real bugs were found here by hand before any test existed (trashing the
+# Trash, and the same run emptying it again), which is why the contracts below
+# are pinned individually rather than by one happy-path assertion.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Layer 1: broad — does the feature work at all, end to end ────────────────
+new_fixture
+echo payload > "$FIX/.npm/_npx/x"
+out=$(HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --apply --yes --trash 2>&1)
+if [[ ! -e "$FIX/.npm/_npx" && -e "$FIX/.Trash/_npx" ]]; then
+  ok "--trash: cache is moved out of place and into ~/.Trash"
+else
+  bad "--trash: cache was not moved into ~/.Trash (src-gone=$([[ -e $FIX/.npm/_npx ]] && echo no || echo yes))"
+fi
+[[ "$(cat "$FIX/.Trash/_npx/x" 2>/dev/null)" == payload ]] \
+  && ok "--trash: trashed content is intact and recoverable" \
+  || bad "--trash: trashed content lost or unreadable"
+[[ "$out" == *"trashed:"* && "$out" == *"Moved to Trash"* ]] \
+  && ok "--trash: reports 'trashed:' per path and a 'Moved to Trash' summary" \
+  || bad "--trash: missing trashed/summary output"
+rm -rf "$FIX"
+
+# ── Layer 2: behavioural contracts ───────────────────────────────────────────
+
+# The headline number must never count trashed bytes as reclaimed: the blocks are
+# still allocated. A trash-only run therefore still reports "Nothing deleted."
+new_fixture
+echo payload > "$FIX/.npm/_npx/x"
+out=$(HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --apply --yes --trash 2>&1)
+[[ "$out" == *"Nothing deleted."* && "$out" != *"Storage freed"* ]] \
+  && ok "--trash: trashed bytes are NOT counted as freed (no 'Storage freed')" \
+  || bad "--trash: trashed bytes leaked into the freed tally"
+[[ "$out" == *"NOT reclaimed until you empty it"* ]] \
+  && ok "--trash: states plainly that nothing is reclaimed until the Trash is emptied" \
+  || bad "--trash: missing the not-reclaimed caveat"
+rm -rf "$FIX"
+
+# The guard inside _rm: a path already under ~/.Trash must be DELETED, never moved,
+# even when TRASH_MODE is on. Moving ~/.Trash/x into ~/.Trash only renames it, so the
+# Trash could never drain. This must run WITH --trash or TRASH_MODE is false and the
+# guard is never evaluated (an earlier version of this test made exactly that mistake
+# and passed against a deliberately broken guard).
+FIX=$(mktemp -d)
+mkdir -p "$FIX/.Trash/oldjunk"; echo old > "$FIX/.Trash/oldjunk/f"
+out=$(HOME="$FIX" PATH="$SAFE_PATH" zsh -c '
+  DRY_RUN=false; TRASH_MODE=true; LOGFILE=""; _FREED_KB=0; _TRASHED_KB=0
+  c_warn(){ printf "%s" "$*"; }; c_dim(){ printf "%s" "$*"; }
+  '"$(sed -n "/^_mv_to_trash() {/,/^}/p" "$SCRIPT")"'
+  '"$(sed -n "/^_rm() {/,/^}/p" "$SCRIPT")"'
+  _rm "'"$FIX"'/.Trash/oldjunk" 2>&1
+')
+if [[ ! -e "$FIX/.Trash/oldjunk" && "$out" == *"removed:"* && "$out" != *"trashed:"* ]]; then
+  ok "--trash guard: a path already in ~/.Trash is DELETED, not re-trashed"
+else
+  bad "--trash guard: Trash content was moved instead of deleted (Trash can never drain) [$out]"
+fi
+rm -rf "$FIX"
+
+# ...and under --trash the empty-Trash step is skipped entirely, so the run does
+# not delete what it just moved there. Without this, --trash provides no undo.
+new_fixture
+echo payload > "$FIX/.npm/_npx/x"
+out=$(HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --apply --yes --trash 2>&1)
+[[ -e "$FIX/.Trash/_npx" && "$out" == *"Skipping empty-Trash"* ]] \
+  && ok "--trash: skips emptying the Trash, so the undo survives the same run" \
+  || bad "--trash: the run emptied the Trash and destroyed its own undo"
+rm -rf "$FIX"
+
+# A trash-only run freed nothing, so it must post no desktop notification.
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; LOG="$FIX/stub.log"
+make_stubs "$STUBDIR"; mkdir -p "$FIX"/.npm/_npx; echo p > "$FIX/.npm/_npx/x"
+HOME="$FIX" STUB_LOG="$LOG" PATH="$STUBDIR:$SAFE_PATH" zsh "$SCRIPT" --apply --yes --trash >/dev/null 2>&1
+grep -q '^osascript ' "$LOG" 2>/dev/null \
+  && bad "--trash: notified even though nothing was actually freed" \
+  || ok "--trash: posts no notification (nothing was freed, only moved)"
+rm -rf "$FIX"
+
+# --trash is not a deletion authorisation. Without --apply it must move nothing.
+new_fixture
+echo payload > "$FIX/.npm/_npx/x"
+HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --trash >/dev/null 2>&1
+[[ -f "$FIX/.npm/_npx/x" && ! -e "$FIX/.Trash/_npx" ]] \
+  && ok "--trash without --apply moves nothing (preview still wins)" \
+  || bad "--trash moved a file without --apply"
+rm -rf "$FIX"
+
+# The ignore list is checked BEFORE the trash branch, so an ignored path is
+# skipped rather than quietly relocated.
+new_fixture
+mkdir -p "$FIX/.config/dehoard"; echo "$FIX/.npm/_npx" > "$FIX/.config/dehoard/ignore"
+echo payload > "$FIX/.npm/_npx/x"
+out=$(HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --apply --yes --trash 2>&1)
+[[ -f "$FIX/.npm/_npx/x" && ! -e "$FIX/.Trash/_npx" ]] \
+  && ok "--trash honours the ignore list (ignored path is not trashed)" \
+  || bad "--trash trashed a path on the ignore list"
+rm -rf "$FIX"
+
+# TRASH_MODE is executed as a boolean command, so it is frozen like DRY_RUN.
+grep -q '^typeset -r TRASH_MODE' "$SCRIPT" \
+  && ok "--trash: TRASH_MODE is typeset -r (cannot be reassigned mid-run)" \
+  || bad "--trash: TRASH_MODE is not frozen"
+
+# ── Layer 3: atomic — _mv_to_trash in isolation ──────────────────────────────
+# Extracted from the script the same way _rm is, so these pin the helper itself
+# rather than observing it through a full run.
+_mvt() {   # $1 = fixture HOME, rest = args to _mv_to_trash; echoes "rc=<n>"
+  local _h="$1"; shift
+  HOME="$_h" PATH="$SAFE_PATH" zsh -c '
+    LOGFILE=""
+    '"$(sed -n "/^_mv_to_trash() {/,/^}/p" "$SCRIPT")"'
+    _mv_to_trash "$1"; echo "rc=$?"
+  ' _ "$@"
+}
+
+FIX=$(mktemp -d); echo one > "$FIX/a.txt"
+r=$(_mvt "$FIX" "$FIX/a.txt")
+[[ "$r" == *rc=0* && -f "$FIX/.Trash/a.txt" && ! -e "$FIX/a.txt" ]] \
+  && ok "_mv_to_trash: no collision → lands at the base name, source removed" \
+  || bad "_mv_to_trash: simple move failed [$r]"
+[[ "$(cat "$FIX/.Trash/a.txt")" == one ]] \
+  && ok "_mv_to_trash: content preserved byte-for-byte" \
+  || bad "_mv_to_trash: content changed"
+rm -rf "$FIX"
+
+FIX=$(mktemp -d); mkdir -p "$FIX/.Trash"; echo existing > "$FIX/.Trash/a.txt"; echo new > "$FIX/a.txt"
+_mvt "$FIX" "$FIX/a.txt" >/dev/null
+[[ -f "$FIX/.Trash/a.txt-1" && "$(cat "$FIX/.Trash/a.txt")" == existing ]] \
+  && ok "_mv_to_trash: 1 collision → suffixed -1, the existing file is NOT clobbered" \
+  || bad "_mv_to_trash: collision clobbered an existing trashed file (data loss)"
+rm -rf "$FIX"
+
+FIX=$(mktemp -d); mkdir -p "$FIX/.Trash"
+echo e0 > "$FIX/.Trash/a.txt"; echo e1 > "$FIX/.Trash/a.txt-1"; echo e2 > "$FIX/.Trash/a.txt-2"
+echo new > "$FIX/a.txt"
+_mvt "$FIX" "$FIX/a.txt" >/dev/null
+if [[ -f "$FIX/.Trash/a.txt-3" && "$(cat "$FIX/.Trash/a.txt-3")" == new \
+      && "$(cat "$FIX/.Trash/a.txt")" == e0 && "$(cat "$FIX/.Trash/a.txt-2")" == e2 ]]; then
+  ok "_mv_to_trash: N collisions → next free suffix, no earlier entry disturbed"
+else
+  bad "_mv_to_trash: multi-collision suffixing wrong or clobbered an earlier entry"
+fi
+rm -rf "$FIX"
+
+FIX=$(mktemp -d); echo spaced > "$FIX/a file with spaces.txt"
+_mvt "$FIX" "$FIX/a file with spaces.txt" >/dev/null
+[[ -f "$FIX/.Trash/a file with spaces.txt" ]] \
+  && ok "_mv_to_trash: a filename containing spaces survives intact" \
+  || bad "_mv_to_trash: split or mangled a spaced filename"
+rm -rf "$FIX"
+
+# Failure path: ~/.Trash exists as a FILE, so mkdir -p cannot create the dir.
+# The helper must report failure AND leave the source untouched, so the caller
+# can warn and skip without crediting anything to the trashed tally.
+FIX=$(mktemp -d); : > "$FIX/.Trash"; echo keepme > "$FIX/a.txt"
+r=$(_mvt "$FIX" "$FIX/a.txt")
+# rc is asserted EXACTLY, not just "file survived": a helper that succeeds while moving
+# nothing also leaves the file in place, and the caller would then credit bytes to the
+# trashed tally and print "trashed:" for a file that never moved. Only the return code
+# distinguishes those two, so pin it.
+[[ "$r" == *rc=1* ]] \
+  && ok "_mv_to_trash: unusable ~/.Trash → returns 1 (failure is reported, not swallowed)" \
+  || bad "_mv_to_trash: reported success for a move that did not happen [$r]"
+[[ -f "$FIX/a.txt" && "$(cat "$FIX/a.txt")" == keepme ]] \
+  && ok "_mv_to_trash: a failed move leaves the source byte-intact" \
+  || bad "_mv_to_trash: lost the source on a failed move"
+rm -rf "$FIX"
+
+# ...and the caller must honour that failure: nothing trashed, nothing tallied.
+new_fixture
+: > "$FIX/.Trash"                      # a file, so the Trash cannot be created
+echo payload > "$FIX/.npm/_npx/x"
+out=$(HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --apply --yes --trash 2>&1)
+[[ -f "$FIX/.npm/_npx/x" && "$out" == *"could not trash"* && "$out" != *"Moved to Trash"* ]] \
+  && ok "--trash: a failed move leaves the file alone and credits nothing" \
+  || bad "--trash: failed move lost the file or credited a bogus tally"
+rm -rf "$FIX"
+
 # Held-open deleted inodes: a process sitting on deleted files keeps their blocks, so df
 # under-reports and dehoard's figure looks wrong for reasons dehoard did not cause. Stub lsof
 # in -F field mode (what the code parses) to fake one 26 GB holder, then one 0.43 GB holder.
