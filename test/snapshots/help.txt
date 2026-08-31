@@ -25,6 +25,9 @@ FLAGS
   --report        read-only audit; never deletes
   --json          machine-readable model inventory (implies --report; pure JSON on stdout)
                   e.g. dehoard --json | jq '.cross_tool_duplicates'
+  --trash         move deletions to ~/.Trash instead of removing them (undo-able).
+                  NOTE: a trashed file still occupies its blocks, so this frees NOTHING until you
+                  empty the Trash. Reported separately from "Storage freed" for that reason.
   --snapshot      same as --json, and also archives the document to
                   ~/.cache/dehoard/snapshots/<UTC-timestamp>.json. Run it on a schedule to
                   see what regrew between two dates:
@@ -36,6 +39,19 @@ FLAGS
                        your ignore list (~/.config/dehoard); preview-first, --dry-run to see the plan
   --purge              like --uninstall, but ALSO removes your ignore list (prints it first)
   --version / -V       print version and exit
+
+ENVIRONMENT
+  Every knob is an environment variable; there are no config files. Numeric ones must be bare
+  integers (a non-numeric value is reported on stderr and the default is used instead).
+    DEHOARD_APPLY_DEFAULT       false  'true' makes --apply the default (--dry-run still wins)
+    DEHOARD_IGNORE_ENABLED      true   'false' disables the always-skip list entirely
+    CACHE_MIN_MB                100    minimum size (MB) for a cache dir to be listed
+    DEHOARD_PM_TIMEOUT          120    seconds before one hung package-manager cleanup is skipped
+    DEHOARD_HELD_OPEN_MIN_GB    5      per-process floor (GB) for the held-open-files warning
+    NO_COLOR / CLICOLOR_FORCE   unset  disable / force terminal color
+    XDG_CACHE_HOME              ~/.cache   holds run logs + --snapshot archives
+    XDG_CONFIG_HOME             ~/.config  holds the ignore list
+  e.g.  DEHOARD_HELD_OPEN_MIN_GB=20 dehoard --report
 
 Flags combine in any order. Without --apply, every run is a safe preview.
 Recommended: run once to preview, then add --apply. Tier 1 always runs first.
@@ -139,7 +155,9 @@ TIER 1: Runs always. Regenerable caches, safe to run anytime (large package-mana
      These are NOT your actual notebooks, your .ipynb files are safe.
      Searched in: ~ (whole home, to depth 10; node_modules/.venv/.git/.cache/Library pruned)
 
- 10. Old installer DMGs in ~/Downloads (>30 days old, >50 MB)
+ 10. Old installers in ~/Downloads (.dmg/.pkg/.iso/.xip, >30 days old, >50 MB)
+     .zip is deliberately NOT included: a large old zip is as likely to be your data
+     as an installer, and this tier deletes without a per-item prompt.
      .dmg files are disk images used to install apps. Once installed,
      the .dmg serves no purpose. Script only removes .dmg files that
      are more than 30 days old AND larger than 50 MB.

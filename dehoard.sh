@@ -30,6 +30,9 @@ GIT_GC_ROOTS=(~/Documents ~/src ~/Desktop ~/Developer "${EXTRA_SCAN_DIRS[@]}")
 # Raise it if a machine running Docker, a database, or a long-lived browser makes this routine:
 #   DEHOARD_HELD_OPEN_MIN_GB=20 dehoard --report
 : ${DEHOARD_HELD_OPEN_MIN_GB:=5}
+# Minimum size (MB) for a VM/container disk image to be listed in --report. Report-only; dehoard
+# never deletes these. Exposed mainly so the code path is reachable in tests.
+: ${DEHOARD_VM_IMAGE_MIN_MB:=500}
 # Set to 'true' to make --apply the default so you don't have to type it every run.
 # Add  export DEHOARD_APPLY_DEFAULT=true  to your ~/.zshrc to make it permanent.
 # Override back to safe preview for a single run:  DEHOARD_APPLY_DEFAULT=false dehoard
@@ -61,6 +64,7 @@ _num_or_default() {   # $1=var name, $2=fallback; resets the var and warns if it
 _num_or_default CACHE_MIN_MB 100
 _num_or_default DEHOARD_PM_TIMEOUT 120
 _num_or_default DEHOARD_HELD_OPEN_MIN_GB 5
+_num_or_default DEHOARD_VM_IMAGE_MIN_MB 500
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Safety: must not run as root, breaks Homebrew, npm, pip
@@ -109,6 +113,9 @@ FLAGS
   --report        read-only audit; never deletes
   --json          machine-readable model inventory (implies --report; pure JSON on stdout)
                   e.g. dehoard --json | jq '.cross_tool_duplicates'
+  --trash         move deletions to ~/.Trash instead of removing them (undo-able).
+                  NOTE: a trashed file still occupies its blocks, so this frees NOTHING until you
+                  empty the Trash. Reported separately from "Storage freed" for that reason.
   --snapshot      same as --json, and also archives the document to
                   ~/.cache/dehoard/snapshots/<UTC-timestamp>.json. Run it on a schedule to
                   see what regrew between two dates:
@@ -120,6 +127,19 @@ FLAGS
                        your ignore list (~/.config/dehoard); preview-first, --dry-run to see the plan
   --purge              like --uninstall, but ALSO removes your ignore list (prints it first)
   --version / -V       print version and exit
+
+ENVIRONMENT
+  Every knob is an environment variable; there are no config files. Numeric ones must be bare
+  integers (a non-numeric value is reported on stderr and the default is used instead).
+    DEHOARD_APPLY_DEFAULT       false  'true' makes --apply the default (--dry-run still wins)
+    DEHOARD_IGNORE_ENABLED      true   'false' disables the always-skip list entirely
+    CACHE_MIN_MB                100    minimum size (MB) for a cache dir to be listed
+    DEHOARD_PM_TIMEOUT          120    seconds before one hung package-manager cleanup is skipped
+    DEHOARD_HELD_OPEN_MIN_GB    5      per-process floor (GB) for the held-open-files warning
+    NO_COLOR / CLICOLOR_FORCE   unset  disable / force terminal color
+    XDG_CACHE_HOME              ~/.cache   holds run logs + --snapshot archives
+    XDG_CONFIG_HOME             ~/.config  holds the ignore list
+  e.g.  DEHOARD_HELD_OPEN_MIN_GB=20 dehoard --report
 
 Flags combine in any order. Without --apply, every run is a safe preview.
 Recommended: run once to preview, then add --apply. Tier 1 always runs first.
@@ -223,7 +243,9 @@ TIER 1: Runs always. Regenerable caches, safe to run anytime (large package-mana
      These are NOT your actual notebooks, your .ipynb files are safe.
      Searched in: ~ (whole home, to depth 10; node_modules/.venv/.git/.cache/Library pruned)
 
- 10. Old installer DMGs in ~/Downloads (>30 days old, >50 MB)
+ 10. Old installers in ~/Downloads (.dmg/.pkg/.iso/.xip, >30 days old, >50 MB)
+     .zip is deliberately NOT included: a large old zip is as likely to be your data
+     as an installer, and this tier deletes without a per-item prompt.
      .dmg files are disk images used to install apps. Once installed,
      the .dmg serves no purpose. Script only removes .dmg files that
      are more than 30 days old AND larger than 50 MB.
@@ -634,6 +656,7 @@ APPLY=false
 JSON=false
 PICK=false
 SNAPSHOT=false
+TRASH_MODE=false
 for arg in "$@"; do
   [[ "$arg" == "--deep" ]]             && DEEP=true
   [[ "$arg" == "--models" ]]           && MODELS=true
@@ -644,6 +667,7 @@ for arg in "$@"; do
   [[ "$arg" == "--yes" || "$arg" == "-y" ]] && ASSUME_YES=true
   [[ "$arg" == "--report" ]]           && REPORT=true
   [[ "$arg" == "--json" ]]             && { JSON=true; REPORT=true; }   # --json implies a read-only report
+  [[ "$arg" == "--trash" ]]            && TRASH_MODE=true   # move to ~/.Trash instead of rm (undo-able, frees nothing yet)
   [[ "$arg" == "--snapshot" ]]         && { SNAPSHOT=true; JSON=true; REPORT=true; }  # archive that report to disk
   if [[ "$arg" == "--reset-ignore" ]]; then
     rm -f "$_IGNORE_FILE"
@@ -726,7 +750,7 @@ c_bold()   { _c '1'    "$@"; }   # bold     , emphasis / prompts
 c_step()   { if $DRY_RUN; then c_dim "$@"; else c_bold "$@"; fi }
 
 # Warn about unrecognised flags, catches typos like --scann silently running Tier 1 only
-_VALID_FLAGS=(--deep --models --scan --pick --dry-run --apply --yes -y --report --json --snapshot --help -h --version -V --reset-ignore --list-ignored --unignore --uninstall --purge)
+_VALID_FLAGS=(--deep --models --scan --pick --dry-run --apply --yes -y --report --json --snapshot --trash --help -h --version -V --reset-ignore --list-ignored --unignore --uninstall --purge)
 for arg in "$@"; do
   # Only warn about --flag tokens; bare paths (e.g. argument to --unignore) are not flags
   [[ "$arg" == --* || "$arg" == -[a-z] ]] || continue
@@ -768,6 +792,7 @@ BEFORE=$(df -k / | awk 'NR==2 {print $4}')
 # deletes. The final "Storage freed" reports THIS, not a whole-disk `df` delta, which would otherwise
 # credit dehoard for ambient disk churn (browsers, Spotlight, other processes) during the run.
 _FREED_KB=0
+_TRASHED_KB=0
 # Deletion log (only in --apply mode), a record of what was removed, when.
 LOGFILE=""
 if $APPLY; then
@@ -863,6 +888,13 @@ _uninstall() {
     if ! $_purge && [[ "${_CONFIG_DIR:A}" == "${_CACHE_DIR:A}" || "${_IGNORE_FILE:A}" == "${_CACHE_DIR:A}/"* ]]; then
       echo "    ${_CACHE_DIR/#$HOME/~}/run-*.log  (deletion logs; the ignore list in this dir is kept)"
       _targets+=("$_CACHE_DIR"/run-*.log(N))
+      # --snapshot archives are dehoard's own exhaust too. Without this the narrowed branch leaves
+      # them behind, so uninstalling a disk cleaner would litter. Announced separately so the
+      # preview text still matches exactly what gets removed.
+      if [[ -d "$_SNAP_DIR" ]]; then
+        echo "    $(du -sh "$_SNAP_DIR" 2>/dev/null | cut -f1)  ${_SNAP_DIR/#$HOME/~}  (snapshot archives)"
+        _targets+=("$_SNAP_DIR")
+      fi
     else
       echo "    $(du -sh "$_CACHE_DIR" 2>/dev/null | cut -f1)  ${_CACHE_DIR/#$HOME/~}  (deletion logs)"
       _targets+=("$_CACHE_DIR")
@@ -948,6 +980,15 @@ _is_ignored() {  # $1 = absolute path (trailing slash stripped); true if it matc
 
 # Deletes paths, or prints what would be deleted in --dry-run/preview mode.
 # Guards against catastrophic targets: empty/unset vars, "/", and "$HOME" itself.
+# Move a path into ~/.Trash for --trash mode. Collision-safe: macOS keeps one flat Trash, so two
+# runs trashing same-named files from different directories would clobber. Suffix instead.
+_mv_to_trash() {
+  local _src="$1" _base="${1:t}" _dest _n=1
+  mkdir -p ~/.Trash 2>/dev/null || return 1
+  _dest=~/.Trash/"$_base"
+  while [[ -e "$_dest" ]]; do _dest=~/.Trash/"${_base}-${_n}"; (( _n++ )); done
+  mv -f "$_src" "$_dest" 2>>"${LOGFILE:-/dev/null}"
+}
 _rm() {
   # Fail-closed precondition: _rm's preview-vs-delete branch reads the global $DRY_RUN.
   # If it's empty/unset (e.g. a refactor accidentally scoped it to a function), the
@@ -1006,6 +1047,23 @@ _rm() {
       # Delete FIRST, report only on success: never print "removed:" for something that did not
       # actually go. rm's own errors are routed to the deletion log, not the terminal, so a
       # permission-denied tree (e.g. root-owned CPAN build dirs) can't flood the screen.
+      # --trash must NOT apply to emptying the Trash itself: moving ~/.Trash/x into ~/.Trash is
+      # incoherent, and it silently renames the item instead of reclaiming it, so the Trash could
+      # never be emptied. Anything already in the Trash is deleted for real even in trash mode.
+      if $TRASH_MODE && [[ "${target:A}" != "${HOME:A}/.Trash/"* ]]; then
+        # Opt-in undo. Deliberately NOT the default: dehoard is a re-claimer, and a file in
+        # ~/.Trash still occupies its blocks, so trashing frees nothing until the Trash is
+        # emptied. Counted separately from _FREED_KB for exactly that reason, and reported as
+        # "moved" rather than "freed", so the headline number never claims space you don't have.
+        if _mv_to_trash "$target"; then
+          echo "  trashed: ${target/#$HOME/~} (${_sz})"
+          (( _TRASHED_KB += _szk ))
+          printf '%s\t%s\n' "TRASHED" "$target" >> "${LOGFILE:-/dev/null}" 2>/dev/null
+          continue
+        fi
+        echo "$(c_warn "  ⚠️  could not trash ${target/#$HOME/~}, leaving it in place")" >&2
+        continue
+      fi
       if rm -rf "$target" 2>>"${LOGFILE:-/dev/null}"; then
         echo "  removed: ${target/#$HOME/~} (${_sz})"                  # human-visible: what was actually deleted
         (( _FREED_KB += _szk ))                                        # count only what actually went
@@ -1091,6 +1149,9 @@ _warn_held_open() {
   # clear the user's terminal mid-report. `print -r --` emits the bytes verbatim.
   print -r -- "$(c_warn "⚠️  $(printf '%.1f' $(( _bytes / 1073741824.0 ))) GB is held by deleted files still open in ${_who}.")"
   print -r -- "$(c_dim  "   df under-reports free space until that process exits. dehoard cannot reclaim it.")"
+  # Name the knob here: someone who considers this routine (Docker, a database, a long-lived
+  # browser) otherwise has no in-tool route to the threshold, and --help is meant to be canonical.
+  print -r -- "$(c_dim  "   Routine on this machine? Raise the floor: DEHOARD_HELD_OPEN_MIN_GB=20")"
 }
 
 _run_timeout() {
@@ -1346,15 +1407,19 @@ if $REPORT; then
   #   Scoped deliberately: this tree at depth 4 costs ~0.4s, while ~/Library/Containers
   #   costs ~52s (796 sandboxed app containers), so Docker stays hardcoded above.
   #   du, not ls: these are sparse. Docker.raw reads 1.0T apparent vs 8.4G real.
-  local _img _ikb
+  #   Floor is a knob (DEHOARD_VM_IMAGE_MIN_MB) purely so this path is testable: a fixture cannot
+  #   realistically write a 500 MB file, and `du -sk` reports ALLOCATED blocks so a sparse stand-in
+  #   measures ~0. Without a knob this branch could only ever be verified by hand.
+  local _img _ikb _rel
   while IFS= read -r -d '' _img; do          # -print0/read -d '': "Application Support" has a space
     _ikb=$(du -sk "$_img" 2>/dev/null | cut -f1)
-    (( ${_ikb:-0} >= 512000 )) || continue   # 500 MB floor, same spirit as the 5 MB Electron floor
+    (( ${_ikb:-0} >= DEHOARD_VM_IMAGE_MIN_MB * 1024 )) || continue
     # Label with the owning APP (first component under Application Support), not the
     # immediate parent: "Claude" is actionable, "vm_bundles" is not.
-    local _rel="${_img#$HOME/Library/Application Support/}"
-    printf "  %-7s %-30s %s\n" "$(du -sh "$_img" 2>/dev/null | cut -f1)" \
-      "${${_rel%%/*}:-VM} disk image" "manual (report only)"
+    _rel="${_img#$HOME/Library/Application Support/}"
+    # Through _report_cache, not a fourth inline printf: the column layout, and any future
+    # colorization or --json wiring, then lives in exactly one place.
+    _report_cache "$_img" "${${_rel%%/*}:-VM} disk image" "manual (report only)"
   done < <(find ~/"Library/Application Support" -maxdepth 4 -type f \
              \( -name '*.img' -o -name '*.img.zst' -o -name '*.raw' -o -name '*.qcow2' \
                 -o -name '*.vmdk' -o -name '*.vdi' \) -print0 2>/dev/null)
@@ -1750,15 +1815,27 @@ find ~ -maxdepth 10 \
   -name ".ipynb_checkpoints" -type d -print \
   2>/dev/null | while IFS= read -r d; do _rm "$d"; done
 
-echo "$(c_step "Removing old installer DMGs from ~/Downloads (>30 days, >50 MB)...")"
-find ~/Downloads -maxdepth 1 -name "*.dmg" -mtime +30 -size +50M 2>/dev/null \
-  | while IFS= read -r f; do
+echo "$(c_step "Removing old installers from ~/Downloads (>30 days, >50 MB)...")"
+# Unambiguous macOS installer containers only. .zip is deliberately EXCLUDED: a large old zip in
+# Downloads is just as likely to be someone's data as an installer, and this tier deletes without a
+# per-item prompt. .dmg/.pkg/.iso/.xip exist to carry software you have already installed, and are
+# re-downloadable by definition. -print0 so a filename with a space or newline cannot split.
+while IFS= read -r -d '' f; do
     echo "  Removing: $(basename "$f") ($(du -sh "$f" 2>/dev/null | cut -f1))"
     _rm "$f"
-  done
+done < <(find ~/Downloads -maxdepth 1 -type f \
+           \( -name '*.dmg' -o -name '*.pkg' -o -name '*.iso' -o -name '*.xip' \) \
+           -mtime +30 -size +50M -print0 2>/dev/null)
 
-echo "$(c_step "Emptying trash and old logs...")"
-_rm ~/.Trash/*
+# Under --trash the whole point is that deletions are recoverable from the Trash, so emptying it in
+# the same run would delete exactly what we just moved there and leave the user with no undo at all.
+# Skip it and say so; the user can empty the Trash themselves, or re-run without --trash.
+if $TRASH_MODE; then
+  echo "$(c_step "Skipping empty-Trash (--trash: emptying it now would undo the undo)...")"
+else
+  echo "$(c_step "Emptying trash and old logs...")"
+  _rm ~/.Trash/*
+fi
 _rm ~/Library/Logs/CrashReporter/MobileDevice/*
 
 echo "$(c_step "Pruning old Time Machine snapshots (keeping latest)...")"
@@ -2906,6 +2983,20 @@ else
     echo "$(c_safe "🗑️  Storage freed: ${_FREED_KB} KB")"
   else
     echo "$(c_dim "🗑️  Nothing deleted.")"
+  fi
+  # Trashed bytes are reported SEPARATELY and never folded into "Storage freed": the blocks are
+  # still allocated until the Trash is emptied, so adding them would overstate the reclaim.
+  if (( _TRASHED_KB > 0 )); then
+    # Same GB/MB/KB ladder as the freed tally and the notification. Integer division alone has now
+    # produced a bogus "0" three separate times in this codebase (freed-space notification,
+    # held-open warning, here); pick the unit instead of hardcoding MB.
+    local _tamt
+    if   (( _TRASHED_KB >= 1048576 )); then _tamt="$(( _TRASHED_KB / 1048576 )) GB"
+    elif (( _TRASHED_KB >= 1024 ));    then _tamt="$(( _TRASHED_KB / 1024 )) MB"
+    else                                    _tamt="${_TRASHED_KB} KB"
+    fi
+    echo "$(c_warn "🗑️  Moved to Trash: ${_tamt} — NOT reclaimed until you empty it.")"
+    echo "$(c_dim  "   Empty it to actually free that space, or restore from ~/.Trash to undo.")"
   fi
   echo "$(c_dim "💾 Free space now: $(df -h / | awk 'NR==2 {print $4}') (whole disk; varies with other activity)")"
   _warn_held_open      # explains a free-space figure that looks wrong; never suggests killing anything

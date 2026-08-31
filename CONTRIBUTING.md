@@ -45,3 +45,17 @@ Open an issue first for anything large. Thanks!
 
 By submitting a contribution you agree it is licensed under the project's [MIT License](LICENSE),
 and you grant the maintainer the right to relicense it as part of the project in the future.
+
+## Before you write code
+
+Read [docs/LESSONS.md](docs/LESSONS.md). It is an incident ledger of defects that actually shipped
+or were actually caught in this repo, each with the rule that prevents a repeat and the test that
+locks it. Several of those bugs recurred two, three, or four times before being written down — the
+page exists so the next one does not.
+
+Two rules from it are worth repeating here, because they are the ones most often broken:
+
+1. **A new test is not evidence until it has been observed to fail.** Revert the fix, watch the test
+   go red, restore. Two tests in this repo passed for weeks while asserting nothing.
+2. **`grep dehoard.sh` before adding a cleanup rule.** Four proposed additions turned out to already
+   exist, one of them with 51 references.

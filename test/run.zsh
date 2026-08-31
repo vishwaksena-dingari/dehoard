@@ -40,6 +40,20 @@ PASS=0 FAIL=0
 ok()  { print -P "  %F{green}✓%f $1"; (( ++PASS )); return 0; }
 bad() { print -P "  %F{red}✗ $1%f";   (( ++FAIL )); return 0; }
 
+# Paranoia guard. This suite runs a tool that deletes files, so "the fixture leaked" must be a loud
+# failure, not a silent one. A real bug shipped because tests set $HOME but not $TMPDIR and Tier 1
+# then deleted the developer's actual temp caches; nothing failed, because the deletions were
+# legitimate for the paths it was handed. Assert the sandbox itself before running anything.
+_assert_sandbox() {   # $1 = label of the about-to-run invocation
+  [[ "${HOME}" == /var/folders/* || "${HOME}" == /tmp/* || "${HOME}" == /private/* ]] \
+    || { print -P "%F{red}FATAL: \$HOME is not a fixture dir ($HOME) — refusing to run $1%f"; exit 2; }
+  [[ "${TMPDIR}" == /var/folders/* || "${TMPDIR}" == /tmp/* || "${TMPDIR}" == /private/* ]] \
+    || { print -P "%F{red}FATAL: \$TMPDIR is not a fixture dir ($TMPDIR) — refusing to run $1%f"; exit 2; }
+  [[ "${HOME}" != "${_REAL_HOME}" ]] \
+    || { print -P "%F{red}FATAL: \$HOME is the REAL home — refusing to run $1%f"; exit 2; }
+}
+_REAL_HOME="$HOME"
+
 new_fixture() {
   FIX=$(mktemp -d)
   mkdir -p "$FIX"/.cache/huggingface/hub \
@@ -51,7 +65,11 @@ new_fixture() {
   echo weights > "$FIX/.ollama/models/llama"   # USER DATA, must survive
   echo trans   > "$FIX/.claude_session"        # decoy user data, must survive
 }
-run() { HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" "$@" >/dev/null 2>&1; }
+run() {
+  # Guard every invocation, not just the first: this is the seam the hermeticity bug slipped through.
+  HOME="$FIX" TMPDIR="$TMPDIR" _assert_sandbox "run $*" || return 2
+  HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" "$@" >/dev/null 2>&1
+}
 
 # Stub harness: fake every external tool dehoard shells out to. Each stub logs
 # "<name> <args>" to $STUB_LOG and exits 0 (so e.g. `docker info` "succeeds").
