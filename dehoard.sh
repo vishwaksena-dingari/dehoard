@@ -1178,7 +1178,14 @@ _run_timeout() {
     kill -0 "$pid" 2>/dev/null || { wait "$pid" 2>/dev/null; return $?; }
     sleep 0.2; (( ticks++ ))
   done
-  kill -TERM "$pid" 2>/dev/null; sleep 1; kill -KILL "$pid" 2>/dev/null
+  # Kill the DESCENDANTS as well as the direct child. A wrapper script (`#!/bin/sh` + real tool)
+  # means the thing actually blocking is a GRANDCHILD, and killing only $pid orphans it. The orphan
+  # keeps the inherited stdout open, so every reader of dehoard's output blocks until it exits: the
+  # timeout returns 124 on schedule while the run still appears frozen. Measured with a hung
+  # `docker info` — _run_timeout returned promptly and the run still stalled for 300s.
+  # Collect children BEFORE killing the parent; once it dies they reparent and -P finds nothing.
+  local _kids; _kids=$(pgrep -P "$pid" 2>/dev/null | tr '\n' ' ')
+  kill -TERM "$pid" ${=_kids} 2>/dev/null; sleep 1; kill -KILL "$pid" ${=_kids} 2>/dev/null
   wait "$pid" 2>/dev/null
   return 124
 }
@@ -1968,7 +1975,13 @@ if $DEEP; then
     fi
   fi
 
-  if command -v docker &>/dev/null && docker info &>/dev/null 2>&1; then
+  # `docker info` must be BOUNDED. A half-dead Docker (backend process alive, Docker.app gone)
+  # leaves the socket present with nothing answering it, so the CLI blocks forever instead of
+  # failing. Measured on a real machine in exactly that state: `docker info` ran past 300s. That is
+  # the single worst hang in this tool, because it sits mid-run with no output and looks like a
+  # freeze rather than a wait. _run_timeout already exists for precisely this class of risk and was
+  # simply never applied here. On timeout, treat Docker as unavailable and skip its cleanup.
+  if command -v docker &>/dev/null && _run_timeout 10 docker info &>/dev/null 2>&1; then
     echo "$(c_step "Pruning Docker (stopped containers, dangling images, unused networks, build cache)...")"
     if $DRY_RUN; then
       echo "  [dry-run] would run: docker system prune -f"

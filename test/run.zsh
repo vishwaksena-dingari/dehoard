@@ -357,6 +357,23 @@ grep -q '^osascript ' "$LOG" 2>/dev/null \
   || ok "no notification when nothing was freed"
 rm -rf "$FIX"
 
+# A hung external tool must not hang the run. Docker is the real-world case: when Docker.app is
+# gone but com.docker.backend survives, the socket exists with nothing answering, and `docker info`
+# blocks forever rather than failing. Measured at >300s on a real machine in that state, which
+# presented as a mid-run freeze with no output. Stub docker to hang and assert the run still
+# finishes, proving the call is bounded by _run_timeout rather than trusting the tool to return.
+FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; LOG="$FIX/stub.log"
+make_stubs "$STUBDIR"
+{ echo '#!/bin/sh'; echo 'sleep 300'; } > "$STUBDIR/docker"   # never returns
+chmod +x "$STUBDIR/docker"
+_t0=$SECONDS
+HOME="$FIX" STUB_LOG="$LOG" PATH="$STUBDIR:$SAFE_PATH" zsh "$SCRIPT" --deep --dry-run >/dev/null 2>&1
+_elapsed=$(( SECONDS - _t0 ))
+(( _elapsed < 120 )) \
+  && ok "a hung \`docker info\` cannot stall the run (finished in ${_elapsed}s, bounded)" \
+  || bad "hung docker stalled the run for ${_elapsed}s - the timeout guard is missing"
+rm -rf "$FIX"
+
 # Arithmetic-injection guard. zsh evaluates a variable's VALUE inside $(( )) recursively, and
 # arithmetic supports assignment — so a numeric env var set to `(DRY_RUN=0)` clobbers the flag
 # _rm branches on and silently turns a PREVIEW run into a real deletion. Regression: the victim
