@@ -136,6 +136,7 @@ ENVIRONMENT
     CACHE_MIN_MB                100    minimum size (MB) for a cache dir to be listed
     DEHOARD_PM_TIMEOUT          120    seconds before one hung package-manager cleanup is skipped
     DEHOARD_HELD_OPEN_MIN_GB    5      per-process floor (GB) for the held-open-files warning
+    DEHOARD_VM_IMAGE_MIN_MB     500    minimum size (MB) for a VM/container disk image to be listed
     NO_COLOR / CLICOLOR_FORCE   unset  disable / force terminal color
     XDG_CACHE_HOME              ~/.cache   holds run logs + --snapshot archives
     XDG_CONFIG_HOME             ~/.config  holds the ignore list

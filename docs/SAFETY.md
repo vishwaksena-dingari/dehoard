@@ -11,8 +11,12 @@ the single guard that enforces them, and the test suite that proves they hold.
    `DEHOARD_APPLY_DEFAULT=true` is set), preview wins, you can always force a safe run.
 3. **Refuses to run as root.** Running under `sudo` exits immediately. dehoard can therefore never
    modify system-owned files; it operates only within your user account.
-4. **Deletion is irreversible.** Removal is a real `rm -rf`, not a move to the Trash. There is no
-   undo. This is *why* preview-first is the default, read the preview, then apply.
+4. **Deletion is irreversible by default.** Removal is a real `rm -rf`, not a move to the Trash.
+   There is no undo. This is *why* preview-first is the default: read the preview, then apply.
+   The one exception is opt-in: `--trash` moves deletions to `~/.Trash` so they can be restored.
+   It is deliberately **not** the default, because a trashed file still occupies its blocks — under
+   `--trash` dehoard reclaims nothing until you empty the Trash, so those bytes are reported
+   separately and never counted as "freed".
 5. **Your data is never a target.** Model weights, generated outputs, chat/session history, source
    code, git history, and configuration are detected and kept. Only regenerable caches, build
    artifacts, and downloadable assets are eligible for deletion.

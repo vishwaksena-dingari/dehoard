@@ -26,8 +26,10 @@ dehoard runs `rm`, so here is what it guarantees before you run anything.
 - The delete primitive only removes paths under `$HOME`, `/var/folders`, or `/tmp`. Anything outside
   those roots is refused, even if `$TMPDIR` is mis-set, and bare `/` and `$HOME` themselves are always
   refused.
-- Deletion is a real `rm`, not a move to the Trash, so it is irreversible. That is why preview comes
-  first: run it, read it, then `--apply`.
+- Deletion is a real `rm`, not a move to the Trash, so it is irreversible by default. That is why
+  preview comes first: run it, read it, then `--apply`. If you want an undo, `--trash` moves
+  deletions to `~/.Trash` instead — but a trashed file still occupies its blocks, so that mode
+  reclaims nothing until you empty the Trash, and those bytes are reported separately from "freed".
 - It never touches your data. Model weights, model outputs, chat and session history, source code, git
   history, and configs are detected and kept. Only regenerable caches and artifacts get removed.
 - Every path dehoard removes through `_rm` is logged to `~/.cache/dehoard/run-<timestamp>.log` when
@@ -132,6 +134,7 @@ still passes the safe-root guard; environment managers (conda/uv/Android/Rust) u
 | `dehoard --scan --pick --apply` | Same scan, but instead of prompting per item it opens **one `fzf` picker per category, biggest first** (a per-category summary of counts + sizes prints first as a contents page). In each category: TAB to mark, **Ctrl-A** all, **Ctrl-D** none, Enter to confirm, **Esc skips that category**; the preview shows last-modified, the recreate command, and any caveat. Interactive-only (skips the Tier 1 sweep); needs `fzf` and `--apply`; falls back to per-item prompts without `fzf`. |
 | `dehoard --json` | Machine-readable model inventory and duplicates as pure JSON on stdout. |
 | `dehoard --snapshot` | Same as `--json`, and also archives the document to `~/.cache/dehoard/snapshots/` so you can diff two dates and see what regrew. |
+| `dehoard --trash` | Move deletions to `~/.Trash` instead of removing them, so they can be restored. Frees nothing until you empty the Trash; reported separately from "Storage freed". |
 | `dehoard --dry-run` | Force preview even with `--apply` (the safe default, made explicit). |
 | `dehoard --yes` / `-y` | Auto-confirm prompts. Combine with `--apply`; use with care. |
 | `dehoard --list-ignored` / `--unignore <path>` / `--reset-ignore` | Manage the always-skip ignore list. |
@@ -310,6 +313,7 @@ Set via environment variables, for example in `~/.zshrc`:
 | `CACHE_MIN_MB` | `100` | Minimum size in MB for a cache dir to appear in the generic sweep. |
 | `DEHOARD_PM_TIMEOUT` | `120` | Seconds before a single external package-manager cleanup (brew/npm/yarn/trunk/…) is timed out and skipped, so one hung tool can't freeze the run. |
 | `DEHOARD_HELD_OPEN_MIN_GB` | `5` | Per-process floor before dehoard reports a process holding deleted-but-open files. Raise it if your machine legitimately holds more (Docker, a local database, a long-lived browser). |
+| `DEHOARD_VM_IMAGE_MIN_MB` | `500` | Minimum size (MB) for a VM/container disk image to be listed in `--report`. Report-only; these are never deleted. Exposed mainly so the code path is reachable in tests. |
 | `NO_COLOR` | unset | Set to any value to disable terminal color ([no-color.org](https://no-color.org)). Color is also off when stdout isn't a TTY (e.g. piped), and never appears in `--json` or the deletion log. |
 | `CLICOLOR_FORCE` | unset | Set to `1` to force color even when stdout isn't a TTY. `--json` stays pure JSON regardless. |
 
