@@ -475,6 +475,45 @@ grep -qE 'lsof -nP -Fn --' "$SCRIPT" \
   && ok "db probe queries lsof without -b (so path arguments actually match)" \
   || bad "db probe uses -b, which silently matches nothing"
 
+# B5: paths that are never a cache are refused even though the allow-list would permit them.
+# The allow-list says "anything under $HOME", which is right for cache sweeps but means one bad
+# glob could reach credentials or mail. These entries bound the blast radius of a future mistake.
+FIX=$(mktemp -d)
+for _prot in "Library/Keychains" "Library/Mail" "Library/Mobile Documents" ".ssh"; do
+  mkdir -p "$FIX/$_prot"; : > "$FIX/$_prot/x"
+  out=$(_rm_iso "$FIX" "$FIX/$_prot/x")
+  [[ -f "$FIX/$_prot/x" && "$out" == *"protected path"* ]] \
+    && ok "refuses protected path: ~/$_prot" \
+    || bad "deleted inside ~/$_prot, which is never a cache: [$out]"
+done
+rm -rf "$FIX"
+
+# B7: an unmeasurable size must read "unknown", never 0. A multi-GB delete logged as 0KB makes the
+# run log lie about the one thing it exists to record.
+FIX=$(mktemp -d); : > "$FIX/f"
+STUBD=$(mktemp -d); printf '#!/bin/sh\nexit 1\n' > "$STUBD/du"; chmod +x "$STUBD/du"
+out=$(HOME="$FIX" PATH="$STUBD:$SAFE_PATH" zsh -c '
+  DRY_RUN=false; TRASH_MODE=false; LOGFILE=""; _FREED_KB=0; _TRASHED_KB=0
+  c_warn(){ printf "%s" "$*"; }; c_dim(){ printf "%s" "$*"; }
+  '"$(sed -n "/^_run_timeout() {/,/^}/p" "$SCRIPT")"'
+  '"$(sed -n "/^_db_family_in_use() {/,/^}/p" "$SCRIPT")"'
+  '"$(sed -n "/^_holds_live_db() {/,/^}/p" "$SCRIPT")"'
+  '"$(sed -n "/^_mv_to_trash() {/,/^}/p" "$SCRIPT")"'
+  '"$(sed -n "/^_rm() {/,/^}/p" "$SCRIPT")"'
+  _rm "'"$FIX"'/f" 2>&1')
+[[ "$out" == *"(unknown)"* && "$out" != *"(0B)"* ]] \
+  && ok "an unmeasurable size logs as 'unknown', never as 0" \
+  || bad "unmeasurable size logged misleadingly: [$out]"
+rm -rf "$FIX" "$STUBD"
+
+# B2: //, /./ and a trailing / all name one file; policy is string-based, so normalize first.
+FIX=$(mktemp -d); mkdir -p "$FIX/d"; : > "$FIX/d/f"
+_rm_iso "$FIX" "$FIX//d/./f" >/dev/null 2>&1
+[[ ! -e "$FIX/d/f" ]] \
+  && ok "a path with // and /./ is normalized and handled" \
+  || bad "non-normalized path was not handled"
+rm -rf "$FIX"
+
 # Escape case: resolution landing outside the safe roots must be refused, not merely announced.
 FIX=$(mktemp -d); mkdir -p "$FIX/Library"
 ln -s /usr/local "$FIX/Library/Caches"

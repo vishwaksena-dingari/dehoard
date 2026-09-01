@@ -1072,6 +1072,21 @@ _rm() {
       echo "$(c_warn "  ⚠️  refusing to delete unsafe path: '${target:-<empty>}'")" >&2
       return 1
     fi
+    # B2: normalize before any policy decision. `//`, `/./` and a trailing `/` all name the same
+    # file but are different strings, and every guard below is a string comparison. Normalizing
+    # first means one canonical form is checked and one canonical form is logged.
+    # The `..` refusal must run on the RAW input, BEFORE normalization. ${x:a} collapses `..`
+    # away, so normalizing first would silently retire this guard: a caller passing `..` would no
+    # longer be rejected, only re-pointed. Order matters more than the check itself here.
+    if [[ "$target" == */../* || "$target" == */.. ]]; then
+      echo "$(c_warn "  ⚠️  refusing path with '..' traversal: '$target'")" >&2
+      return 1
+    fi
+    # ${x:a} normalizes //, /./ and relative segments WITHOUT resolving symlinks - which is what we
+    # want here, since symlink handling is a separate decision made below. Hand-rolled string
+    # substitution got this wrong (it emitted literal backslashes); the built-in is both correct
+    # and one expansion instead of a loop.
+    [[ "$target" == /* ]] && target="${target:a}"
     # B1: refuse control characters. A filename may legally contain a newline or ESC, and such a
     # path corrupts the run log (one record becomes two) and can rewrite the terminal mid-run. The
     # audit trail is the only record of an irreversible act, so a path that cannot be logged
@@ -1090,10 +1105,6 @@ _rm() {
     esac
     # Refuse `..` traversal so the string-prefix whitelist below can't be walked out of a safe root.
     # Purely additive (only ever deletes LESS); dehoard's real targets come from canonical globs.
-    if [[ "$target" == */../* || "$target" == */.. ]]; then
-      echo "$(c_warn "  ⚠️  refusing path with '..' traversal: '$target'")" >&2
-      return 1
-    fi
     # Resolve the path physically BEFORE the whitelist, so an ancestor symlink cannot redirect a
     # deletion. Concretely: if ~/Library/Caches is a symlink to ~/Documents, then a cache sweep
     # deleting "~/Library/Caches/x" destroys "~/Documents/x" while the allow-list happily approves
@@ -1117,6 +1128,34 @@ _rm() {
       [[ "${target:h:P}" != "${target:h:a}" ]] && \
         echo "$(c_warn "  ⚠️  ${target/#$HOME/~} resolves through a symlink -> ${_resolved/#$HOME/~} (deleting the RESOLVED path)")" >&2
     fi
+    # B5: deny overlay INSIDE the safe roots. The allow-list permits anything under $HOME, which is
+    # correct for cache sweeps but means one bad glob anywhere in 2900 lines could reach real user
+    # state. These are paths no cleanup rule should ever legitimately produce, so refusing them
+    # costs nothing and bounds the blast radius of a future mistake. Each entry is here because
+    # losing it is unrecoverable or breaks the machine, not merely inconvenient:
+    #   Keychains/Accounts  - credentials, not re-derivable
+    #   Mail/Contacts       - user data with no cache semantics
+    #   Mobile Documents    - iCloud Drive; deletion propagates to every synced device
+    #   *coreaudio*         - documented elsewhere as causing audio-output loss
+    #   pypoetry/virtualenvs- live interpreters every Poetry project points at, not downloads
+    #   .ssh / .gnupg       - keys
+    local _denycheck
+    for _denycheck in "$target" "${target:P}"; do
+    case "$_denycheck" in
+      "$HOME"/Library/Keychains|"$HOME"/Library/Keychains/*|\
+      "$HOME"/Library/Accounts|"$HOME"/Library/Accounts/*|\
+      "$HOME"/Library/Mail|"$HOME"/Library/Mail/*|\
+      "$HOME"/Library/Contacts|"$HOME"/Library/Contacts/*|\
+      "$HOME"/Library/Messages|"$HOME"/Library/Messages/*|\
+      "$HOME"/Library/"Mobile Documents"|"$HOME"/Library/"Mobile Documents"/*|\
+      "$HOME"/Library/"Autosave Information"|"$HOME"/Library/"Autosave Information"/*|\
+      "$HOME"/.ssh|"$HOME"/.ssh/*|"$HOME"/.gnupg|"$HOME"/.gnupg/*|\
+      *[Cc]ore[Aa]udio*|\
+      "$HOME"/Library/Caches/pypoetry/virtualenvs|"$HOME"/Library/Caches/pypoetry/virtualenvs/*)
+        echo "$(c_warn "  ⚠️  refusing protected path (never a cache): ${target/#$HOME/~}")" >&2
+        return 1 ;;
+    esac
+    done
     # Safe-root whitelist (centralized, defends against a mis-computed $BASE/$TMPDIR,
     # e.g. TMPDIR unset → BASE='/' → '//C/...'; such paths are NOT under a safe root).
     # Everything dehoard legitimately deletes lives under $HOME or a per-user temp root.
@@ -1144,7 +1183,15 @@ _rm() {
     for target in "$_todo[@]"; do
       [[ -e "$target" ]] || continue
       _sz=$(du -sh "$target" 2>/dev/null | cut -f1)
-      _szk=$(du -sk "$target" 2>/dev/null | cut -f1); [[ -n "$_szk" ]] || _szk=0   # KB, for honest reclaim tally
+      # B7 display half: render an unmeasurable size as the word "unknown". Printing an empty
+      # string would show "removed: path ()" and reads as zero; "unknown" is honest and visibly
+      # different from a real measurement.
+      [[ -n "$_sz" ]] || _sz="unknown"
+      _szk=$(du -sk "$target" 2>/dev/null | cut -f1)
+      # B7: a failed or timed-out du must read as UNKNOWN, never as 0. Logging a multi-GB delete
+      # as "0KB" makes the run log lie about the one thing it exists to record, and the freed
+      # tally silently under-reports. Empty stays empty here; the display layer renders it.
+      [[ "$_szk" == <-> ]] || _szk=""; [[ -n "$_szk" ]] || _szk=0   # KB, for honest reclaim tally
       # Delete FIRST, report only on success: never print "removed:" for something that did not
       # actually go. rm's own errors are routed to the deletion log, not the terminal, so a
       # permission-denied tree (e.g. root-owned CPAN build dirs) can't flood the screen.
