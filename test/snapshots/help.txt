@@ -49,6 +49,7 @@ ENVIRONMENT
     DEHOARD_PM_TIMEOUT          120    seconds before one hung package-manager cleanup is skipped
     DEHOARD_HELD_OPEN_MIN_GB    5      per-process floor (GB) for the held-open-files warning
     DEHOARD_VM_IMAGE_MIN_MB     500    minimum size (MB) for a VM/container disk image to be listed
+    DEHOARD_SIZE_TIMEOUT        20     seconds before one directory-size probe is abandoned
     NO_COLOR / CLICOLOR_FORCE   unset  disable / force terminal color
     XDG_CACHE_HOME              ~/.cache   holds run logs + --snapshot archives
     XDG_CONFIG_HOME             ~/.config  holds the ignore list
@@ -160,7 +161,10 @@ TIER 1: Runs always. Regenerable caches, safe to run anytime (large package-mana
      These are NOT your actual notebooks, your .ipynb files are safe.
      Searched in: ~ (whole home, to depth 10; node_modules/.venv/.git/.cache/Library pruned)
 
- 10. Old installers in ~/Downloads (.dmg/.pkg/.iso/.xip, >30 days old, >50 MB)
+ 10. Old installers (.dmg/.pkg/.iso/.xip, >30 days old, >50 MB)
+     Scanned in ~/Downloads, ~/Desktop, ~/Documents, the Homebrew download cache and
+     Mail's attachment store - installers accumulate wherever they were saved, not only
+     in Downloads. Absent locations are skipped silently.
      .zip is deliberately NOT included: a large old zip is as likely to be your data
      as an installer, and this tier deletes without a per-item prompt.
      .dmg files are disk images used to install apps. Once installed,

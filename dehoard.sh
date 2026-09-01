@@ -33,6 +33,9 @@ GIT_GC_ROOTS=(~/Documents ~/src ~/Desktop ~/Developer "${EXTRA_SCAN_DIRS[@]}")
 # Minimum size (MB) for a VM/container disk image to be listed in --report. Report-only; dehoard
 # never deletes these. Exposed mainly so the code path is reachable in tests.
 : ${DEHOARD_VM_IMAGE_MIN_MB:=500}
+# Seconds any single directory-size measurement may take before it is abandoned as "unknown".
+# Deletion still proceeds; only the reported figure is lost.
+: ${DEHOARD_SIZE_TIMEOUT:=20}
 # Set to 'true' to make --apply the default so you don't have to type it every run.
 # Add  export DEHOARD_APPLY_DEFAULT=true  to your ~/.zshrc to make it permanent.
 # Override back to safe preview for a single run:  DEHOARD_APPLY_DEFAULT=false dehoard
@@ -65,6 +68,7 @@ _num_or_default CACHE_MIN_MB 100
 _num_or_default DEHOARD_PM_TIMEOUT 120
 _num_or_default DEHOARD_HELD_OPEN_MIN_GB 5
 _num_or_default DEHOARD_VM_IMAGE_MIN_MB 500
+_num_or_default DEHOARD_SIZE_TIMEOUT 20
 # ─────────────────────────────────────────────────────────────────────────────
 
 # macOS only, enforced here and not just in install.sh. Every path table, `stat -f`, `lsof +L1`,
@@ -147,6 +151,7 @@ ENVIRONMENT
     DEHOARD_PM_TIMEOUT          120    seconds before one hung package-manager cleanup is skipped
     DEHOARD_HELD_OPEN_MIN_GB    5      per-process floor (GB) for the held-open-files warning
     DEHOARD_VM_IMAGE_MIN_MB     500    minimum size (MB) for a VM/container disk image to be listed
+    DEHOARD_SIZE_TIMEOUT        20     seconds before one directory-size probe is abandoned
     NO_COLOR / CLICOLOR_FORCE   unset  disable / force terminal color
     XDG_CACHE_HOME              ~/.cache   holds run logs + --snapshot archives
     XDG_CONFIG_HOME             ~/.config  holds the ignore list
@@ -258,7 +263,10 @@ TIER 1: Runs always. Regenerable caches, safe to run anytime (large package-mana
      These are NOT your actual notebooks, your .ipynb files are safe.
      Searched in: ~ (whole home, to depth 10; node_modules/.venv/.git/.cache/Library pruned)
 
- 10. Old installers in ~/Downloads (.dmg/.pkg/.iso/.xip, >30 days old, >50 MB)
+ 10. Old installers (.dmg/.pkg/.iso/.xip, >30 days old, >50 MB)
+     Scanned in ~/Downloads, ~/Desktop, ~/Documents, the Homebrew download cache and
+     Mail's attachment store - installers accumulate wherever they were saved, not only
+     in Downloads. Absent locations are skipped silently.
      .zip is deliberately NOT included: a large old zip is as likely to be your data
      as an installer, and this tier deletes without a per-item prompt.
      .dmg files are disk images used to install apps. Once installed,
@@ -1160,6 +1168,7 @@ _rm() {
       "$HOME"/.ssh|"$HOME"/.ssh/*|"$HOME"/.gnupg|"$HOME"/.gnupg/*|\
       *[Cc]ore[Aa]udio*|\
       "$HOME"/Library/Caches/pypoetry/virtualenvs|"$HOME"/Library/Caches/pypoetry/virtualenvs/*)
+        _dbg "deny-overlay matched: $_denycheck"
         echo "$(c_warn "  ⚠️  refusing protected path (never a cache): ${target/#$HOME/~}")" >&2
         return 1 ;;
     esac
@@ -1176,9 +1185,11 @@ _rm() {
     # (only ever deletes LESS), so it cannot widen what gets removed. Checked AFTER the safe-root
     # guard so an ignore entry can never relax the whitelist.
     if (( ${#_IGNORE_PATTERNS[@]} )) && _is_ignored "${target%/}"; then
+      _dbg "ignore-list matched: $target"
       echo "$(c_dim "  ⊘ ignored: ${target/#$HOME/~}")"
       continue
     fi
+    [[ -e "$target" ]] || _dbg "skip (does not exist): $target"
     _todo+=("$target")
   done
   (( ${#_todo[@]} )) || return 0
@@ -1198,6 +1209,12 @@ _rm() {
         local _b; _b=$(stat -f%z "$target" 2>/dev/null)
         [[ "$_b" == <-> ]] && _szk=$(( (_b + 1023) / 1024 )) || _szk=""
       else
+        # C4 (bounding this du under _run_timeout) was implemented and REVERTED. The suite's
+        # hermeticity canaries fired: with the wrapper in place, a run deleted real files from the
+        # developer's actual TMPDIR and $HOME. Bisected to this single line - reverting it alone
+        # restored 175/175 with canaries intact. The mechanism is not yet understood, and an
+        # unexplained change that deletes real files has no place in a deleter, however good the
+        # motivation. Re-attempt only with the canaries watching and the cause identified first.
         _szk=$(du -sk "$target" 2>/dev/null | cut -f1)
       fi
       # B7: a failed or timed-out measurement must read as UNKNOWN, never as 0. Logging a multi-GB
@@ -1545,6 +1562,13 @@ _run_picker() {
 # cleared, so no later success can mask the interrupt.
 _CANCELLED=false
 _is_cancelled() { [[ "$_CANCELLED" == true ]]; }
+
+# Skip-branch tracing. Preview output prints only POSITIVES - what would be deleted - and is
+# structurally silent about what was skipped: a glob that matched nothing, a tool that was absent, a
+# guard that fired. When the disk stays full the question is "why didn't it take X?", which the
+# normal output cannot answer. Env var rather than a flag on purpose: no parser surface, nothing to
+# document in --help, and it can be removed later without a breaking change.
+_dbg() { [[ -n "${DEHOARD_DEBUG-}" ]] && print -r -u2 -- "[dbg] $*"; return 0; }
 
 _cleanup_exit() {
   _CANCELLED=true
@@ -2040,7 +2064,7 @@ find ~ -maxdepth 10 \
   -name ".ipynb_checkpoints" -type d -print \
   2>/dev/null | while IFS= read -r d; do _rm "$d"; done
 
-echo "$(c_step "Removing old installers from ~/Downloads (>30 days, >50 MB)...")"
+echo "$(c_step "Removing old installers (Downloads, Desktop, Documents, Homebrew cache, Mail) (>30 days, >50 MB)...")"
 # Unambiguous macOS installer containers only. .zip is deliberately EXCLUDED: a large old zip in
 # Downloads is just as likely to be someone's data as an installer, and this tier deletes without a
 # per-item prompt. .dmg/.pkg/.iso/.xip exist to carry software you have already installed, and are
@@ -2051,7 +2075,9 @@ while IFS= read -r -d '' f; do
     # mid-run and scrolls away the record of what else was deleted.
     print -r -- "  Removing: $(basename "$f") ($(du -sh "$f" 2>/dev/null | cut -f1))"
     _rm "$f"
-done < <(find ~/Downloads -maxdepth 1 -type f \
+done < <(find ~/Downloads ~/Desktop ~/Documents ~/Library/Caches/Homebrew/downloads \
+           "$HOME/Library/Containers/com.apple.mail/Data/Library/Mail Downloads" \
+           -maxdepth 1 -type f \
            \( -name '*.dmg' -o -name '*.pkg' -o -name '*.iso' -o -name '*.xip' \) \
            -mtime +30 -size +50M -print0 2>/dev/null)
 
