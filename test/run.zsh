@@ -382,10 +382,17 @@ rm -rf "$FIX"
 # at, while the literal path still satisfies the allow-list. Two properties are pinned: a resolution
 # that ESCAPES the safe roots is refused outright, and one that stays inside them is permitted but
 # logged under its RESOLVED name so the audit trail cannot claim an innocent path.
+# Extracts _rm AND every helper it calls. When _rm gained the live-database guard, omitting those
+# helpers made the guard undefined inside this shell, so _rm fell through and deleted an open
+# database while the test reported a failure that looked like a code bug. Any new _rm dependency
+# must be added here too.
 _rm_iso() {   # $1 = fixture HOME, $2 = path; echoes _rm's output
   HOME="$1" PATH="$SAFE_PATH" zsh -c '
     DRY_RUN=false; TRASH_MODE=false; LOGFILE=""; _FREED_KB=0; _TRASHED_KB=0
     c_warn(){ printf "%s" "$*"; }; c_dim(){ printf "%s" "$*"; }
+    '"$(sed -n "/^_run_timeout() {/,/^}/p" "$SCRIPT")"'
+    '"$(sed -n "/^_db_family_in_use() {/,/^}/p" "$SCRIPT")"'
+    '"$(sed -n "/^_holds_live_db() {/,/^}/p" "$SCRIPT")"'
     '"$(sed -n "/^_mv_to_trash() {/,/^}/p" "$SCRIPT")"'
     '"$(sed -n "/^_rm() {/,/^}/p" "$SCRIPT")"'
     _rm "$1" 2>&1' _ "$2"
@@ -438,6 +445,35 @@ grep -q '"Service Worker/CacheStorage"' "$SCRIPT" \
 grep -qE 'uname.*!=.*Darwin' "$SCRIPT" \
   && ok "script refuses non-Darwin (not only install.sh)" \
   || bad "no OS guard in the script itself"
+
+# B3: never unlink a database another process still has open. Unlinking a live Cache.db does not
+# merely lose a cache - the owner keeps writing to the unlinked inode, so the blocks are never
+# freed and the "cleanup" can make free space go DOWN.
+# Both directions are pinned. The open case caught a real bug: the probe originally passed `-b` to
+# lsof, which stops it stat'ing its path arguments, so it matched nothing and reported every open
+# database as idle - a guard that looked present and protected nothing.
+FIX=$(mktemp -d); mkdir -p "$FIX/Cache"; echo dbdata > "$FIX/Cache/Cache.db"
+zsh -c 'exec 9< "'"$FIX"'/Cache/Cache.db"; sleep 30' & _HOLDER=$!
+sleep 1
+_rm_iso "$FIX" "$FIX/Cache" >/dev/null 2>&1
+[[ -f "$FIX/Cache/Cache.db" ]] \
+  && ok "an OPEN database is kept, not unlinked (avoids the unbounded-write-loop failure)" \
+  || bad "deleted a database while a process still had it open"
+kill -9 $_HOLDER 2>/dev/null; wait $_HOLDER 2>/dev/null
+rm -rf "$FIX"
+
+# ...and the inverse, or the guard would simply stop dehoard cleaning anything.
+FIX=$(mktemp -d); mkdir -p "$FIX/Cache"; echo dbdata > "$FIX/Cache/Cache.db"
+_rm_iso "$FIX" "$FIX/Cache" >/dev/null 2>&1
+[[ ! -e "$FIX/Cache" ]] \
+  && ok "a CLOSED database is still deleted (guard is not blanket-refusing)" \
+  || bad "guard refused a closed database - it would clean nothing"
+rm -rf "$FIX"
+
+# The -b regression itself: the path-argument query must not carry -b.
+grep -qE 'lsof -nP -Fn --' "$SCRIPT" \
+  && ok "db probe queries lsof without -b (so path arguments actually match)" \
+  || bad "db probe uses -b, which silently matches nothing"
 
 # Escape case: resolution landing outside the safe roots must be refused, not merely announced.
 FIX=$(mktemp -d); mkdir -p "$FIX/Library"

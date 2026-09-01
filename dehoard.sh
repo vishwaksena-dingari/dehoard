@@ -229,7 +229,11 @@ TIER 1: Runs always. Regenerable caches, safe to run anytime (large package-mana
   8. Cargo download caches (~/.cargo/registry/cache, /src, /git/checkouts)
      Rust/Cargo caches downloaded .crate files and their unpacked sources.
      registry/cache  → compressed .crate tarballs (re-downloaded on next build)
-     registry/src    → unpacked crate sources   (re-extracted on next build)
+     registry/src    → unpacked crate sources   (see the caveat below)
+     CAVEAT: src is normally re-EXTRACTED from registry/cache with no network. Because --deep
+     clears cache too, the next build instead re-DOWNLOADS from crates.io. If you rely on
+     offline builds, keep src (it is the larger of the two: typically ~10x cache) and clear
+     only cache. rust-analyzer also reads src continuously, so an open IDE will re-index.
      git/checkouts   → working copies of git-sourced deps (re-cloned on next build)
      registry/index is preserved to avoid a slow re-index.
      No-op if ~/.cargo does not exist.
@@ -1004,6 +1008,49 @@ _mv_to_trash() {
   while [[ -e "$_dest" ]]; do _dest=~/.Trash/"${_base}-${_n}"; (( _n++ )); done
   mv -f "$_src" "$_dest" 2>>"${LOGFILE:-/dev/null}"
 }
+# Tri-state open-handle probe for SQLite databases. Returns 0 = a process holds it open,
+# 1 = provably nobody does, 2 = could not tell. Callers must treat 2 like 0 and keep the file:
+# folding "unknown" into "idle" is how a live database gets unlinked.
+#
+# Why this exists: unlinking a Cache.db that an app still has open does not just lose a cache. The
+# owner keeps writing to the now-unlinked inode, so the blocks are never freed and the write loop
+# can fill the volume - the deletion makes free space go DOWN. The -wal and -shm siblings are
+# checked in the same call because they are one logical database.
+#
+# A stale -shm left by an unclean exit is NOT evidence of use; only a real open handle is. Checking
+# for the file's existence instead would refuse orphaned caches forever.
+_db_family_in_use() {   # $1 = path to a .db/.sqlite file
+  command -v lsof &>/dev/null || return 2          # cannot tell
+  local _out _rc
+  # NO -b here, unlike the +L1 scan elsewhere. `-b` avoids blocking syscalls, which stops lsof from
+  # stat'ing its PATH ARGUMENTS - so it silently matches nothing and every open database reads as
+  # idle. Measured: `lsof -bnP -Fn -- <open file>` returns 0 lines, without -b it returns 3. A
+  # guard that always answers "not in use" is worse than no guard, because it looks like protection.
+  # _run_timeout is the real hang protection here, so dropping -b costs nothing.
+  _out=$(_run_timeout 5 lsof -nP -Fn -- "$1" "$1-wal" "$1-shm" 2>/dev/null); _rc=$?
+  (( _rc == 124 )) && return 2                     # timed out -> unknown -> keep
+  [[ -n "$_out" ]] && return 0                     # a handle exists -> in use
+  (( _rc == 1 )) && return 1                       # clean "no such open file" -> idle
+  return 2                                         # anything else -> unknown -> keep
+}
+
+# Does this deletion target hold a live database? Bounded deliberately: the leaf itself, or a
+# maxdepth-1 scan of a directory. Measured at ~11ms for the probe and ~35ms per lsof, so it is
+# affordable on the delete path; a recursive `lsof +D` would not be.
+_holds_live_db() {   # $1 = target; 0 = yes keep it, 1 = safe to proceed
+  local _f
+  if [[ -f "$1" ]]; then
+    case "$1" in (*.db|*.sqlite|*.sqlite3) _db_family_in_use "$1"; (( $? != 1 )) && return 0 ;; esac
+    return 1
+  fi
+  [[ -d "$1" ]] || return 1
+  while IFS= read -r _f; do
+    [[ -n "$_f" ]] || continue
+    _db_family_in_use "$_f"; (( $? != 1 )) && { print -r -- "$_f"; return 0; }
+  done < <(find "$1" -maxdepth 1 \( -name '*.db' -o -name '*.sqlite' -o -name '*.sqlite3' \) 2>/dev/null)
+  return 1
+}
+
 _rm() {
   # Fail-closed precondition: _rm's preview-vs-delete branch reads the global $DRY_RUN.
   # If it's empty/unset (e.g. a refactor accidentally scoped it to a function), the
@@ -1101,6 +1148,15 @@ _rm() {
       # Delete FIRST, report only on success: never print "removed:" for something that did not
       # actually go. rm's own errors are routed to the deletion log, not the terminal, so a
       # permission-denied tree (e.g. root-owned CPAN build dirs) can't flood the screen.
+      # Never unlink a database another process still has open (see _db_family_in_use). Checked
+      # here, immediately before deletion, rather than at discovery: an app can start between the
+      # scan and the delete, so an earlier verdict would be stale by exactly the interval that
+      # matters.
+      local _livedb
+      if _livedb=$(_holds_live_db "$target"); then
+        print -r -- "$(c_warn "  ⊘ keeping ${target/#$HOME/~}: a process still has ${_livedb:t:-it} open")" >&2
+        continue
+      fi
       # --trash must NOT apply to emptying the Trash itself: moving ~/.Trash/x into ~/.Trash is
       # incoherent, and it silently renames the item instead of reclaiming it, so the Trash could
       # never be emptied. Anything already in the Trash is deleted for real even in trash mode.
@@ -1882,7 +1938,11 @@ echo "$(c_step "Clearing Cargo download caches...")"
 _CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
 if [[ -d "$_CARGO_HOME/registry" || -d "$_CARGO_HOME/git" ]]; then
   _rm "$_CARGO_HOME/registry/cache"    # compressed .crate tarballs
-  _rm "$_CARGO_HOME/registry/src"      # unpacked crate sources
+  # Deleting src as well as cache is deliberate but NOT free: src alone is usually ~10x cache
+  # (measured here: 1.3G vs 140M), so keeping it would forfeit most of the reclaim. The real cost
+  # is that the next build becomes a crates.io round trip rather than a local re-extract, and
+  # rust-analyzer re-indexes. --deep is documented as "real cost after deletion"; this is that cost.
+  _rm "$_CARGO_HOME/registry/src"      # unpacked crate sources (offline builds will need network)
   _rm "$_CARGO_HOME/git/checkouts"     # working copies of git-sourced deps
 fi
 
@@ -2014,6 +2074,33 @@ if $DEEP; then
     fi
     _rm ~/Library/Developer/CoreSimulator/Caches
   fi
+
+  # Superseded self-updating CLI releases. Tools like Claude Code install each release into
+  # ~/.local/share/<tool>/versions/<version>/ and never remove the old ones, so the directory grows
+  # by ~300 MB per update forever. Measured here: 12 versions, 3.1 GB, of which one is live.
+  #
+  # The live version is identified by RESOLVING THE BINARY ON $PATH, not by version-sorting the
+  # directory names. Sorting is the trap this project already avoids for VS Code extensions:
+  # pre-release and platform-suffixed names mis-rank, and picking wrong here deletes the running
+  # tool. If the binary cannot be resolved into the versions dir, nothing is touched.
+  echo "$(c_step "Removing superseded CLI versions (keeps the one currently on \$PATH)...")"
+  local _vtool _vdir _live _v
+  for _vdir in ~/.local/share/*/versions(N/); do
+    _vtool="${${_vdir:h}:t}"
+    command -v "$_vtool" &>/dev/null || continue          # tool not installed -> leave it alone
+    _live="$(readlink -f "$(command -v "$_vtool")" 2>/dev/null)"
+    [[ "$_live" == "${_vdir%/}/"* ]] || continue          # binary does not live here -> skip
+    _live="${${_live#${_vdir%/}/}%%/*}"                   # the version component itself
+    # Each "version" may be a directory OR a single fat binary - Claude Code ships the latter, at
+    # ~250-300 MB apiece. Testing -d here silently skipped everything, so match either with -e and
+    # glob without a type qualifier.
+    [[ -n "$_live" && -e "${_vdir%/}/$_live" ]] || continue
+    for _v in "${_vdir%/}"/*(N); do
+      [[ "${_v:t}" == "$_live" ]] && continue             # never the running version
+      echo "  ${_vtool} ${_v:t} (superseded; live is ${_live})"
+      _rm "$_v"
+    done
+  done
 
   if command -v ccache &>/dev/null && [[ -d ~/.ccache ]]; then
     CCACHE_SIZE=$(du -sh ~/.ccache 2>/dev/null | cut -f1)

@@ -131,7 +131,11 @@ TIER 1: Runs always. Regenerable caches, safe to run anytime (large package-mana
   8. Cargo download caches (~/.cargo/registry/cache, /src, /git/checkouts)
      Rust/Cargo caches downloaded .crate files and their unpacked sources.
      registry/cache  → compressed .crate tarballs (re-downloaded on next build)
-     registry/src    → unpacked crate sources   (re-extracted on next build)
+     registry/src    → unpacked crate sources   (see the caveat below)
+     CAVEAT: src is normally re-EXTRACTED from registry/cache with no network. Because --deep
+     clears cache too, the next build instead re-DOWNLOADS from crates.io. If you rely on
+     offline builds, keep src (it is the larger of the two: typically ~10x cache) and clear
+     only cache. rust-analyzer also reads src continuously, so an open IDE will re-index.
      git/checkouts   → working copies of git-sourced deps (re-cloned on next build)
      registry/index is preserved to avoid a slow re-index.
      No-op if ~/.cargo does not exist.
