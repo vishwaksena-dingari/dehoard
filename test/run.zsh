@@ -402,6 +402,43 @@ out=$(_rm_iso "$FIX" "$FIX/Library/Caches/thesis.txt")
   || bad "run log claimed the literal path, hiding what was really deleted"
 rm -rf "$FIX"
 
+# B1: a path containing a control character cannot be logged faithfully, so it is not deleted.
+# A newline in a filename splits one log record into two; ESC can rewrite the terminal mid-run.
+FIX=$(mktemp -d); printf 'data' > "$FIX/plain.txt"
+out=$(_rm_iso "$FIX" "$FIX/$(printf 'ev\x1bil')")
+[[ "$out" == *"control character"* ]] \
+  && ok "_rm refuses a path containing a control character" \
+  || bad "_rm accepted a control-character path: [$out]"
+rm -rf "$FIX"
+
+# B4: in-progress downloads are skipped, not deleted - the transfer cannot be resumed once gone.
+FIX=$(mktemp -d); : > "$FIX/big.dmg.crdownload"; : > "$FIX/other.part"
+out=$(_rm_iso "$FIX" "$FIX/big.dmg.crdownload")
+[[ -f "$FIX/big.dmg.crdownload" && "$out" == *"in-progress download"* ]] \
+  && ok "_rm skips an in-progress download (.crdownload survives)" \
+  || bad "_rm deleted an in-progress download: [$out]"
+out=$(_rm_iso "$FIX" "$FIX/other.part")
+[[ -f "$FIX/other.part" ]] \
+  && ok "_rm skips a .part file too" \
+  || bad "_rm deleted a .part file"
+rm -rf "$FIX"
+
+# B6: MV3 extension bytecode must NOT be in the Electron cache whitelist. Deleting ScriptCache
+# breaks extension service workers even with the app closed; CacheStorage stays, it repopulates.
+# Check the ARRAY line, not any mention: the exclusion is explained in a comment that names the
+# path, and a naive grep matches that comment and reports the hazard as still present.
+grep -E '^\s*CachedExtensionVSIXs .*ScriptCache' "$SCRIPT" >/dev/null \
+  && bad "Service Worker/ScriptCache is still in the sweep array - breaks MV3 service workers" \
+  || ok "Service Worker/ScriptCache excluded from the Electron sweep (MV3 bytecode)"
+grep -q '"Service Worker/CacheStorage"' "$SCRIPT" \
+  && ok "Service Worker/CacheStorage still swept (regenerable response cache)" \
+  || bad "CacheStorage was dropped too - over-corrected"
+
+# OS guard: the script itself refuses non-Darwin, matching what install.sh already promises.
+grep -qE 'uname.*!=.*Darwin' "$SCRIPT" \
+  && ok "script refuses non-Darwin (not only install.sh)" \
+  || bad "no OS guard in the script itself"
+
 # Escape case: resolution landing outside the safe roots must be refused, not merely announced.
 FIX=$(mktemp -d); mkdir -p "$FIX/Library"
 ln -s /usr/local "$FIX/Library/Caches"

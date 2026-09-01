@@ -67,6 +67,16 @@ _num_or_default DEHOARD_HELD_OPEN_MIN_GB 5
 _num_or_default DEHOARD_VM_IMAGE_MIN_MB 500
 # ─────────────────────────────────────────────────────────────────────────────
 
+# macOS only, enforced here and not just in install.sh. Every path table, `stat -f`, `lsof +L1`,
+# `xcrun`, `tmutil` and `osascript` call in this file is Darwin-specific, and `stat -f` in
+# particular means something ENTIRELY different under GNU coreutils (filesystem info, not a format
+# string) - so on Linux this would misbehave quietly rather than fail. install.sh already refuses
+# non-Darwin, but the documented "download the one file and read it first" path bypassed that.
+if [[ "$(uname)" != "Darwin" ]]; then
+  echo "dehoard is macOS-only (it depends on Darwin paths, stat, lsof and xcrun). Refusing to run." >&2
+  exit 1
+fi
+
 # Safety: must not run as root, breaks Homebrew, npm, pip
 if [[ $EUID -eq 0 ]]; then
   echo "❌ Do not run this script as root (sudo zsh dehoard.sh)."
@@ -1015,6 +1025,22 @@ _rm() {
       echo "$(c_warn "  ⚠️  refusing to delete unsafe path: '${target:-<empty>}'")" >&2
       return 1
     fi
+    # B1: refuse control characters. A filename may legally contain a newline or ESC, and such a
+    # path corrupts the run log (one record becomes two) and can rewrite the terminal mid-run. The
+    # audit trail is the only record of an irreversible act, so a path that cannot be logged
+    # faithfully is not deleted at all.
+    if [[ "$target" == *[$'\x01'-$'\x1f']* ]]; then
+      echo "$(c_warn "  ⚠️  refusing path containing a control character (cannot be logged faithfully)")" >&2
+      return 1
+    fi
+    # B4: never touch an in-progress download. These are partial files a browser is actively
+    # writing; they look like junk (large, oddly named, in ~/Downloads) and deleting one destroys
+    # a transfer the user is waiting on, with no way to resume.
+    case "${target:t}" in
+      *.crdownload|*.download|*.part|*.partial|*.opdownload) 
+        echo "$(c_dim "  ⊘ skipping in-progress download: ${target:t}")"
+        continue ;;
+    esac
     # Refuse `..` traversal so the string-prefix whitelist below can't be walked out of a safe root.
     # Purely additive (only ever deletes LESS); dehoard's real targets come from canonical globs.
     if [[ "$target" == */../* || "$target" == */.. ]]; then
@@ -2910,7 +2936,12 @@ if $SCAN; then
   # Chromium recreates all of these on next launch (quit the app first).
   local _chrome_caches=(Cache "Code Cache" GPUCache DawnCache DawnGraphiteCache \
     DawnWebGPUCache ShaderCache GrShaderCache CachedData CachedProfilesData \
-    CachedExtensionVSIXs "Service Worker/CacheStorage" "Service Worker/ScriptCache")
+    CachedExtensionVSIXs "Service Worker/CacheStorage")
+  # NOTE: "Service Worker/ScriptCache" is deliberately NOT in that list. It holds compiled MV3
+  # extension bytecode, and removing it breaks extension service workers and can trigger security
+  # warnings even when the app is closed. It looks like a cache and is named like one, which is
+  # exactly why it needs saying. CacheStorage stays: that is the Cache API's response store, which
+  # apps repopulate on next load.
   local _appsup=~/"Library/Application Support"
   if [[ -d "$_appsup" ]]; then
     local _app _sub _name _t; local -a _targets
