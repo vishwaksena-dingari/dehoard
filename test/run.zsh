@@ -147,7 +147,11 @@ out=$(HOME=/tmp/dh-fake PATH="$SAFE_PATH" zsh -c '
   '"$(sed -n "/^_rm() {/,/^}/p" "$SCRIPT")"'
   _rm /etc/hosts 2>&1; echo "rc=$?"
 ')
-[[ "$out" == *"refusing path outside safe roots"* && "$out" == *"rc=1"* ]] \
+# Assert the BEHAVIOUR (refused, rc=1), not one exact sentence. There are two legitimate refusal
+# reasons for /etc/hosts and which one fires is an implementation detail: macOS symlinks /etc to
+# /private/etc, so the symlink-resolution guard can reject it before the plain prefix check does.
+# Pinning the wording made a correct, stricter refusal look like a regression.
+[[ "$out" == *"rc=1"* && ( "$out" == *"refusing path outside safe roots"* || "$out" == *"outside the safe roots"* ) ]] \
   && ok "_rm refuses out-of-root path (/etc/hosts)" \
   || bad "_rm did NOT refuse /etc/hosts: $out"
 
@@ -372,6 +376,39 @@ _elapsed=$(( SECONDS - _t0 ))
 (( _elapsed < 120 )) \
   && ok "a hung \`docker info\` cannot stall the run (finished in ${_elapsed}s, bounded)" \
   || bad "hung docker stalled the run for ${_elapsed}s - the timeout guard is missing"
+rm -rf "$FIX"
+
+# Symlinked ancestors. A redirected ~/Library/Caches makes a cache sweep delete whatever it points
+# at, while the literal path still satisfies the allow-list. Two properties are pinned: a resolution
+# that ESCAPES the safe roots is refused outright, and one that stays inside them is permitted but
+# logged under its RESOLVED name so the audit trail cannot claim an innocent path.
+_rm_iso() {   # $1 = fixture HOME, $2 = path; echoes _rm's output
+  HOME="$1" PATH="$SAFE_PATH" zsh -c '
+    DRY_RUN=false; TRASH_MODE=false; LOGFILE=""; _FREED_KB=0; _TRASHED_KB=0
+    c_warn(){ printf "%s" "$*"; }; c_dim(){ printf "%s" "$*"; }
+    '"$(sed -n "/^_mv_to_trash() {/,/^}/p" "$SCRIPT")"'
+    '"$(sed -n "/^_rm() {/,/^}/p" "$SCRIPT")"'
+    _rm "$1" 2>&1' _ "$2"
+}
+FIX=$(mktemp -d); mkdir -p "$FIX/Documents" "$FIX/Library"
+echo precious > "$FIX/Documents/thesis.txt"
+ln -s "$FIX/Documents" "$FIX/Library/Caches"
+out=$(_rm_iso "$FIX" "$FIX/Library/Caches/thesis.txt")
+[[ "$out" == *"resolves through a symlink"* ]] \
+  && ok "symlinked ancestor is announced before deleting" \
+  || bad "symlinked ancestor deleted silently: [$out]"
+[[ "$out" == *"Documents/thesis.txt"* && "$out" != *"removed: ~/Library/Caches/thesis.txt"* ]] \
+  && ok "run log names the RESOLVED path, not the innocent literal" \
+  || bad "run log claimed the literal path, hiding what was really deleted"
+rm -rf "$FIX"
+
+# Escape case: resolution landing outside the safe roots must be refused, not merely announced.
+FIX=$(mktemp -d); mkdir -p "$FIX/Library"
+ln -s /usr/local "$FIX/Library/Caches"
+out=$(_rm_iso "$FIX" "$FIX/Library/Caches/anything")
+[[ "$out" == *"outside the safe roots"* && "$out" != *"removed:"* ]] \
+  && ok "symlink resolving outside the safe roots is refused" \
+  || bad "symlink escaped the allow-list: [$out]"
 rm -rf "$FIX"
 
 # Arithmetic-injection guard. zsh evaluates a variable's VALUE inside $(( )) recursively, and

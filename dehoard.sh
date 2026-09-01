@@ -1021,6 +1021,29 @@ _rm() {
       echo "$(c_warn "  ⚠️  refusing path with '..' traversal: '$target'")" >&2
       return 1
     fi
+    # Resolve the path physically BEFORE the whitelist, so an ancestor symlink cannot redirect a
+    # deletion. Concretely: if ~/Library/Caches is a symlink to ~/Documents, then a cache sweep
+    # deleting "~/Library/Caches/x" destroys "~/Documents/x" while the allow-list happily approves
+    # it (the literal string is still under $HOME) and the log records the innocent path, so the
+    # audit trail never names what was actually removed. Verified reproducible before this guard.
+    # ${target:P} resolves every symlinked component. The resolved path is what gets whitelisted;
+    # the ORIGINAL is still what we delete, so behaviour is unchanged for ordinary paths and this
+    # can only ever refuse more, never less.
+    local _resolved="${target:P}"
+    if [[ "$_resolved" != "$target" ]]; then
+      case "$_resolved" in
+        "$HOME"/*|/var/folders/*|/private/var/folders/*|/tmp/*|/private/tmp/*) ;;
+        *) echo "$(c_warn "  ⚠️  refusing '$target': resolves through a symlink to '$_resolved', outside the safe roots")" >&2
+           return 1 ;;
+      esac
+      # Still inside the safe roots, so this is permitted - but SAY SO. A redirected ancestor means
+      # the path deleted is not the path the rule named: a symlinked ~/Library/Caches makes a cache
+      # sweep delete ~/Documents, and a log line reading "removed: ~/Library/Caches/x" would never
+      # reveal that. macOS itself symlinks /tmp and /var, so refusing every symlinked ancestor is
+      # not viable; naming the real target is. The resolved path is what goes in the run log.
+      [[ "${target:h:P}" != "${target:h:a}" ]] && \
+        echo "$(c_warn "  ⚠️  ${target/#$HOME/~} resolves through a symlink -> ${_resolved/#$HOME/~} (deleting the RESOLVED path)")" >&2
+    fi
     # Safe-root whitelist (centralized, defends against a mis-computed $BASE/$TMPDIR,
     # e.g. TMPDIR unset → BASE='/' → '//C/...'; such paths are NOT under a safe root).
     # Everything dehoard legitimately deletes lives under $HOME or a per-user temp root.
@@ -1072,7 +1095,8 @@ _rm() {
       if rm -rf "$target" 2>>"${LOGFILE:-/dev/null}"; then
         # print -r --: a path can contain backslash sequences that zsh's echo would expand into
         # real control characters, letting a crafted filename rewrite this audit line.
-        print -r -- "  removed: ${target/#$HOME/~} (${_sz})"           # human-visible: what was actually deleted
+        # Report the RESOLVED path: with a symlinked ancestor the literal is not what was removed.
+        print -r -- "  removed: ${_resolved/#$HOME/~} (${_sz})"        # human-visible: what was actually deleted
         (( _FREED_KB += _szk ))                                        # count only what actually went
         [[ -n "$LOGFILE" ]] && printf '%s\t%s\n' "$_sz" "$target" >> "$LOGFILE"   # raw record (never colored)
       else
