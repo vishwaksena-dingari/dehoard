@@ -386,15 +386,18 @@ rm -rf "$FIX"
 # helpers made the guard undefined inside this shell, so _rm fell through and deleted an open
 # database while the test reported a failure that looked like a code bug. Any new _rm dependency
 # must be added here too.
+# Every function _rm calls, in definition order. _rm has gained dependencies three times and each
+# time an inline extraction elsewhere silently omitted the new one, making the guard undefined and
+# the test fail as though the CODE were broken. One list, one place to update.
+_RM_DEPS=(_is_cancelled _run_timeout _load_open_files _db_family_in_use _holds_live_db _mv_to_trash _rm)
+_rm_deps_src() { local f; for f in $_RM_DEPS; do sed -n "/^$f() {/,/^}/p" "$SCRIPT"; done }
+
 _rm_iso() {   # $1 = fixture HOME, $2 = path; echoes _rm's output
   HOME="$1" PATH="$SAFE_PATH" zsh -c '
-    DRY_RUN=false; TRASH_MODE=false; LOGFILE=""; _FREED_KB=0; _TRASHED_KB=0
+    DRY_RUN=false; TRASH_MODE=false; LOGFILE=""; _FREED_KB=0; _TRASHED_KB=0; _CANCELLED=false
+    _OPEN_FILES_SNAPSHOT_FILE=""; _OPEN_FILES_LOADED=false
     c_warn(){ printf "%s" "$*"; }; c_dim(){ printf "%s" "$*"; }
-    '"$(sed -n "/^_run_timeout() {/,/^}/p" "$SCRIPT")"'
-    '"$(sed -n "/^_db_family_in_use() {/,/^}/p" "$SCRIPT")"'
-    '"$(sed -n "/^_holds_live_db() {/,/^}/p" "$SCRIPT")"'
-    '"$(sed -n "/^_mv_to_trash() {/,/^}/p" "$SCRIPT")"'
-    '"$(sed -n "/^_rm() {/,/^}/p" "$SCRIPT")"'
+    '"$(_rm_deps_src)"'
     _rm "$1" 2>&1' _ "$2"
 }
 FIX=$(mktemp -d); mkdir -p "$FIX/Documents" "$FIX/Library"
@@ -471,9 +474,12 @@ _rm_iso "$FIX" "$FIX/Cache" >/dev/null 2>&1
 rm -rf "$FIX"
 
 # The -b regression itself: the path-argument query must not carry -b.
-grep -qE 'lsof -nP -Fn --' "$SCRIPT" \
-  && ok "db probe queries lsof without -b (so path arguments actually match)" \
-  || bad "db probe uses -b, which silently matches nothing"
+# One cached scan, not a per-file probe: lsof walks every process descriptor table to prove a file
+# is NOT open, so per-candidate probing measured ~6.5s each and made the guard far costlier than the
+# deletion it protects.
+grep -qE '_load_open_files' "$SCRIPT" \
+  && ok "db probe uses one cached lsof snapshot, not a per-file scan" \
+  || bad "db probe scans per file - far too slow"
 
 # B5: paths that are never a cache are refused even though the allow-list would permit them.
 # The allow-list says "anything under $HOME", which is right for cache sweeps but means one bad
