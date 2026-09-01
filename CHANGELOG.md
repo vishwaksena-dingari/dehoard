@@ -3,6 +3,46 @@
 All notable changes to `dehoard` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [0.2.8]: 2026-08-31
+
+### Fixed
+- **`_run_timeout` never actually bounded anything with a nested process.** It backgrounds the
+  command and kills `$pid` on expiry, but when the target is a wrapper script the thing blocking is
+  a **grandchild**. Killing the wrapper orphans it, and the orphan keeps the inherited stdout open,
+  so every reader of dehoard's output blocks until it exits — the timeout returned 124 on schedule
+  while the run still appeared frozen. This is the hang protection used for *every* external tool,
+  and the existing test passed only because its stub never nested a process. Descendants are now
+  collected with `pgrep -P` **before** the parent is killed (afterwards they reparent and `-P` finds
+  nothing) and the whole set is signalled. Measured against a hung stub: 300s before, 6.3s after.
+- **`docker info` was called unguarded and could hang forever.** With Docker in a half-dead state —
+  `Docker.app` gone, `com.docker.backend` still alive — the socket exists with nothing answering it
+  and the CLI blocks rather than failing. Measured past 300s on a real machine in that state, which
+  presented as a mid-run freeze with no output. `--deep --dry-run` went from never completing to
+  32.9s.
+- **A symlinked ancestor could redirect a deletion, and the log would hide it.** With
+  `~/Library/Caches` symlinked at `~/Documents`, deleting `~/Library/Caches/thesis.txt` destroyed
+  `~/Documents/thesis.txt` while the run log recorded the innocent literal path. The allow-list
+  approved it because the string is still under `$HOME`. The safe-root check now runs against the
+  physically resolved path (so a symlink escaping the safe roots is refused outright), and a
+  redirection that stays inside them is announced, with the **resolved** path recorded in the log.
+  Refusing every symlinked ancestor was rejected as a fix: macOS itself symlinks `/tmp` and `/var`.
+
+### Tests
+- 153 → 156 assertions. Hermeticity is now asserted as a **property** rather than per call site:
+  `_assert_sandbox` was wired into `run()`, but only 2 of ~100 invocations use it and a newly-written
+  test would escape anyway. Canaries are planted in the real environment at a path Tier 1 genuinely
+  targets and checked at the end, so a regression fails loudly whichever test caused it. Placement
+  matters and the first attempt got it wrong — a canary nested inside a `mktemp -d` survives a real
+  break, and sabotage proved it passed while the suite was pointed at the real `TMPDIR`.
+- Every new assertion was verified to fail against the unfixed code.
+
+### Notes
+- Declined after testing: `-ef` inode comparison for `$HOME`, recommended on the grounds that
+  `/USERS/...` slips past a string compare. The premise is correct (`/USERS` resolves to the same
+  inode) but the conclusion is not: it is a deny-list concern. Under an allow-list the case variant
+  fails to match the `$HOME/*` prefix and is refused, so the change would add complexity for no
+  security gain.
+
 ## [0.2.7]: 2026-08-29
 
 ### Security
