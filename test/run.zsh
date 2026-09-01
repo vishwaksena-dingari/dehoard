@@ -491,10 +491,15 @@ rm -rf "$FIX"
 # B7: an unmeasurable size must read "unknown", never 0. A multi-GB delete logged as 0KB makes the
 # run log lie about the one thing it exists to record.
 FIX=$(mktemp -d); : > "$FIX/f"
-STUBD=$(mktemp -d); printf '#!/bin/sh\nexit 1\n' > "$STUBD/du"; chmod +x "$STUBD/du"
+# Stub BOTH du and stat: plain files are now sized with `stat -f%z` and only directories fall back
+# to du, so stubbing du alone left the real stat running and the size was measurable after all.
+STUBD=$(mktemp -d)
+printf '#!/bin/sh\nexit 1\n' > "$STUBD/du";   chmod +x "$STUBD/du"
+printf '#!/bin/sh\nexit 1\n' > "$STUBD/stat"; chmod +x "$STUBD/stat"
 out=$(HOME="$FIX" PATH="$STUBD:$SAFE_PATH" zsh -c '
   DRY_RUN=false; TRASH_MODE=false; LOGFILE=""; _FREED_KB=0; _TRASHED_KB=0
   c_warn(){ printf "%s" "$*"; }; c_dim(){ printf "%s" "$*"; }
+  '"$(sed -n "/^_is_cancelled() {/,/^}/p" "$SCRIPT")"'
   '"$(sed -n "/^_run_timeout() {/,/^}/p" "$SCRIPT")"'
   '"$(sed -n "/^_db_family_in_use() {/,/^}/p" "$SCRIPT")"'
   '"$(sed -n "/^_holds_live_db() {/,/^}/p" "$SCRIPT")"'
