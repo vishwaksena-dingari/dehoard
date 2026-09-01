@@ -514,6 +514,50 @@ _rm_iso "$FIX" "$FIX//d/./f" >/dev/null 2>&1
   || bad "non-normalized path was not handled"
 rm -rf "$FIX"
 
+# B8: once an interrupt has been seen, _rm stops working through its argument list. Without a
+# sticky flag a signal delivered to a child can be absorbed by a `|| true` wrapper and the sweep
+# carries on after the user asked it to stop.
+FIX=$(mktemp -d); : > "$FIX/a"; : > "$FIX/b"
+out=$(HOME="$FIX" PATH="$SAFE_PATH" zsh -c '
+  DRY_RUN=false; TRASH_MODE=false; LOGFILE=""; _FREED_KB=0; _TRASHED_KB=0; _CANCELLED=true
+  c_warn(){ printf "%s" "$*"; }; c_dim(){ printf "%s" "$*"; }
+  '"$(sed -n "/^_is_cancelled() {/,/^}/p" "$SCRIPT")"'
+  '"$(sed -n "/^_run_timeout() {/,/^}/p" "$SCRIPT")"'
+  '"$(sed -n "/^_db_family_in_use() {/,/^}/p" "$SCRIPT")"'
+  '"$(sed -n "/^_holds_live_db() {/,/^}/p" "$SCRIPT")"'
+  '"$(sed -n "/^_mv_to_trash() {/,/^}/p" "$SCRIPT")"'
+  '"$(sed -n "/^_rm() {/,/^}/p" "$SCRIPT")"'
+  _rm "'"$FIX"'/a" "'"$FIX"'/b" 2>&1; echo "rc=$?"')
+[[ -f "$FIX/a" && -f "$FIX/b" && "$out" == *"rc=130"* ]] \
+  && ok "B8: after an interrupt _rm deletes nothing further (rc=130)" \
+  || bad "B8: _rm kept deleting after cancellation: [$out]"
+rm -rf "$FIX"
+
+# Xcode device-support symbols: keep the newest N, drop the rest. Ordered by MTIME, not by version
+# string, because version sorting mis-ranks betas - the same trap avoided for CLI versions.
+FIX=$(mktemp -d); DS="$FIX/Library/Developer/Xcode/iOS DeviceSupport"; mkdir -p "$DS"
+for v in 16.0 17.0 18.0 19.0; do mkdir -p "$DS/$v"; sleep 0.05; touch "$DS/$v"; done
+out=$(zsh -c 'emulate zsh; setopt NULL_GLOB
+  DEHOARD_XCODE_DEVICESUPPORT_KEEP=2
+  _rm(){ print -r -- "DEL:${1:t}"; }
+  for _dsroot in '"$FIX"'/Library/Developer/Xcode/*\ DeviceSupport(N/); do
+    _vers=("${_dsroot%/}"/*(N/om))
+    (( ${#_vers[@]} > DEHOARD_XCODE_DEVICESUPPORT_KEEP )) || continue
+    for (( _i = DEHOARD_XCODE_DEVICESUPPORT_KEEP + 1; _i <= ${#_vers[@]}; _i++ )); do _rm "${_vers[_i]}"; done
+  done')
+[[ "$out" == *"DEL:16.0"* && "$out" == *"DEL:17.0"* && "$out" != *"DEL:19.0"* && "$out" != *"DEL:18.0"* ]] \
+  && ok "Xcode DeviceSupport keeps the newest 2, removes older ones" \
+  || bad "Xcode DeviceSupport pruning wrong: [$out]"
+rm -rf "$FIX"
+
+# Poetry virtualenvs must never be swept, even though sibling Poetry caches are.
+grep -qE 'pypoetry/artifacts' "$SCRIPT" \
+  && ok "Poetry artifacts/cache are swept" \
+  || bad "Poetry cache rule missing"
+grep -E '_rm .*pypoetry/virtualenvs' "$SCRIPT" >/dev/null \
+  && bad "Poetry virtualenvs are being deleted - those are live interpreters" \
+  || ok "Poetry virtualenvs are never deleted (live interpreters)"
+
 # Escape case: resolution landing outside the safe roots must be refused, not merely announced.
 FIX=$(mktemp -d); mkdir -p "$FIX/Library"
 ln -s /usr/local "$FIX/Library/Caches"

@@ -1067,6 +1067,9 @@ _rm() {
   local target
   local -a _todo=()
   for target in "$@"; do
+    # Stop deleting the moment an interrupt has been seen. Without this a multi-path _rm call keeps
+    # working through its argument list after Ctrl-C, because the signal was delivered to a child.
+    _is_cancelled && return 130
     # Hard stops: empty/unset, root, or $HOME itself.
     if [[ -z "$target" || "$target" == "/" || "$target" == "$HOME" || "$target" == "$HOME/" ]]; then
       echo "$(c_warn "  ⚠️  refusing to delete unsafe path: '${target:-<empty>}'")" >&2
@@ -1522,7 +1525,15 @@ _run_picker() {
 
 # Graceful exit on Ctrl+C or SIGTERM: report freed space so far (from dehoard's own deletion tally,
 # not a df delta, same honesty rule as print_result).
+# B8: a sticky cancel flag. _cleanup_exit exits directly, but a signal delivered while a child is
+# running can be absorbed by a `|| true` / `2>/dev/null` best-effort wrapper, so the sweep carries
+# on after the user asked it to stop. Sweep loops check _CANCELLED and bail; once set it is never
+# cleared, so no later success can mask the interrupt.
+_CANCELLED=false
+_is_cancelled() { [[ "$_CANCELLED" == true ]]; }
+
 _cleanup_exit() {
+  _CANCELLED=true
   echo ""
   echo "$(c_warn "⚠️  Interrupted.")"
   (( _FREED_KB > 0 )) && echo "$(c_safe "🗑️  Freed so far: $(( _FREED_KB / 1024 )) MB")"
@@ -2121,6 +2132,55 @@ if $DEEP; then
     fi
     _rm ~/Library/Developer/CoreSimulator/Caches
   fi
+
+  # ── Additional toolchain caches (D-batch) ────────────────────────────────────────────────────
+  # Every entry is a download or build cache its own tool re-creates. Each is guarded by [[ -d ]]
+  # so absent tools cost nothing. NONE of these existed on the machine this was written on, so
+  # they are unvalidated locally - they are here because the paths are documented and the shape
+  # matches rules already proven in this file.
+  echo "$(c_step "Clearing additional toolchain caches (Bazel, Zig, SwiftPM, JS bundlers, Poetry, Expo)...")"
+  local _d
+  for _d in ~/.cache/bazel ~/.cache/zig \
+            ~/.cache/swift-package-manager ~/Library/Caches/org.swift.swiftpm \
+            ~/.cache/turbo ~/.turbo/cache ~/.cache/vite ~/.vite/cache ~/.parcel-cache \
+            ~/.cache/webpack ~/.cache/esbuild ~/.cache/electron ~/.cache/typescript \
+            ~/.cache/pre-commit ~/.cache/prisma \
+            ~/Library/Application\ Support/pyinstaller/bincache \
+            ~/.android/build-cache ~/.android/cache \
+            ~/Library/Caches/lima/download; do
+    [[ -d "$_d" ]] && _rm "$_d"
+  done
+
+  # Poetry: artifacts and cache only. NEVER virtualenvs - those are live interpreters that every
+  # Poetry project points at, not downloads, and removing them breaks every env on the machine.
+  # (Also covered by the deny overlay in _rm, so this is belt and braces.)
+  for _d in ~/Library/Caches/pypoetry/artifacts ~/Library/Caches/pypoetry/cache; do
+    [[ -d "$_d" ]] && _rm "$_d"
+  done
+
+  # Expo: cache subdirectories only. state.json holds auth tokens - deleting it logs the user out
+  # of Expo, which is not something a disk cleaner should ever do silently.
+  for _d in ~/.expo/expo-go ~/.expo/android-apk-cache ~/.expo/ios-simulator-app-cache \
+            ~/.expo/native-modules-cache ~/.expo/schema-cache ~/.expo/template-cache \
+            ~/.expo/versions-cache; do
+    [[ -d "$_d" ]] && _rm "$_d"
+  done
+
+  # Xcode device-support symbols: one folder per iOS version ever connected, 1-3 GB each, and
+  # Xcode re-copies them off the device on next connect. Keep the newest N (default 2) so recent
+  # devices still debug without a re-copy. Sorted by mtime, NOT by version string: version sorting
+  # mis-ranks betas and is the same trap avoided for VS Code extensions and CLI versions.
+  : ${DEHOARD_XCODE_DEVICESUPPORT_KEEP:=2}
+  _num_or_default DEHOARD_XCODE_DEVICESUPPORT_KEEP 2
+  local _dsroot _keep _i
+  for _dsroot in ~/Library/Developer/Xcode/*\ DeviceSupport(N/); do
+    local -a _vers; _vers=("${_dsroot%/}"/*(N/om))     # om = newest mtime first
+    (( ${#_vers[@]} > DEHOARD_XCODE_DEVICESUPPORT_KEEP )) || continue
+    echo "  ${_dsroot:t}: keeping the newest ${DEHOARD_XCODE_DEVICESUPPORT_KEEP} of ${#_vers[@]}"
+    for (( _i = DEHOARD_XCODE_DEVICESUPPORT_KEEP + 1; _i <= ${#_vers[@]}; _i++ )); do
+      _rm "${_vers[_i]}"
+    done
+  done
 
   # Superseded self-updating CLI releases. Tools like Claude Code install each release into
   # ~/.local/share/<tool>/versions/<version>/ and never remove the old ones, so the directory grows
