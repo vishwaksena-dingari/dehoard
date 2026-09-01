@@ -1718,5 +1718,17 @@ fi
 rm -rf "$_CANARY_TMP" "$_CANARY_REAL_HOME_MARK"
 
 echo ""
+# The --apply stress test runs a REAL deletion against a fixture holding every category at once,
+# including guarded items placed inside directories Tier 1 actually removes. It found two holes the
+# isolated unit tests could not: both guards checked only the target path, so a live database or a
+# partial download NESTED inside a deleted directory was invisible.
+if zsh "${0:A:h}/stress-apply.zsh" "$SCRIPT" > /tmp/dehoard-stress.$$ 2>&1; then
+  ok "--apply stress test: real deletion, every category, guards in harm's way"
+else
+  bad "--apply stress test failed: $(grep -c '✗' /tmp/dehoard-stress.$$) assertion(s)"
+  grep '✗' /tmp/dehoard-stress.$$ | head -3
+fi
+rm -f /tmp/dehoard-stress.$$
+
 print -P "%F{cyan}dehoard tests: ${PASS} passed, ${FAIL} failed%f"
 (( FAIL == 0 ))

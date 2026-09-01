@@ -1076,10 +1076,15 @@ _holds_live_db() {   # $1 = target; 0 = yes keep it, 1 = safe to proceed
     return 1
   fi
   [[ -d "$1" ]] || return 1
+  # Depth 3, not 1. Tier 1 deletes whole directories, and a live database is routinely one or two
+  # levels inside one (an Electron app's Cache/live/Cache.db). A maxdepth-1 scan looked correct and
+  # protected nothing in the case that actually happens - caught by the --apply stress test, which
+  # places the database inside a directory Tier 1 really removes. Bounded at 3 so the probe stays
+  # cheap; deeper nesting is possible but is not the shape that occurs in practice.
   while IFS= read -r _f; do
     [[ -n "$_f" ]] || continue
     _db_family_in_use "$_f"; (( $? != 1 )) && { print -r -- "$_f"; return 0; }
-  done < <(find "$1" -maxdepth 1 \( -name '*.db' -o -name '*.sqlite' -o -name '*.sqlite3' \) 2>/dev/null)
+  done < <(find "$1" -maxdepth 3 \( -name '*.db' -o -name '*.sqlite' -o -name '*.sqlite3' \) 2>/dev/null)
   return 1
 }
 
@@ -1134,10 +1139,23 @@ _rm() {
     # writing; they look like junk (large, oddly named, in ~/Downloads) and deleting one destroys
     # a transfer the user is waiting on, with no way to resume.
     case "${target:t}" in
-      *.crdownload|*.download|*.part|*.partial|*.opdownload) 
+      *.crdownload|*.download|*.part|*.partial|*.opdownload)
         echo "$(c_dim "  ⊘ skipping in-progress download: ${target:t}")"
         continue ;;
     esac
+    # ...and the same check for downloads NESTED inside a directory about to be removed. Testing
+    # only the target's own name protected a partial file passed directly and nothing at all when
+    # its parent directory was the deletion target - which is how Tier 1 actually deletes. Bounded
+    # find, first hit wins, so the cost is one cheap walk per directory candidate.
+    if [[ -d "$target" ]]; then
+      local _partial
+      _partial=$(find "$target" -maxdepth 3 \( -name '*.crdownload' -o -name '*.download' \
+                 -o -name '*.part' -o -name '*.partial' -o -name '*.opdownload' \) -print -quit 2>/dev/null)
+      if [[ -n "$_partial" ]]; then
+        echo "$(c_dim "  ⊘ keeping ${target/#$HOME/~}: contains an in-progress download (${_partial:t})")"
+        continue
+      fi
+    fi
     # Refuse `..` traversal so the string-prefix whitelist below can't be walked out of a safe root.
     # Purely additive (only ever deletes LESS); dehoard's real targets come from canonical globs.
     # Resolve the path physically BEFORE the whitelist, so an ancestor symlink cannot redirect a
