@@ -1736,6 +1736,16 @@ echo ""
 # including guarded items placed inside directories Tier 1 actually removes. It found two holes the
 # isolated unit tests could not: both guards checked only the target path, so a live database or a
 # partial download NESTED inside a deleted directory was invisible.
+# --scan removes PROJECT artifacts, which is higher-stakes than Tier 1: a wrong deletion costs a
+# working tree, not a cache. It had no stress test until now.
+if zsh "${0:A:h}/stress-scan.zsh" "$SCRIPT" > /tmp/dehoard-scan.$$ 2>&1; then
+  ok "--scan stress test: artifacts removed, source and non-build 'target' dirs preserved"
+else
+  bad "--scan stress test failed: $(grep -c '✗' /tmp/dehoard-scan.$$) assertion(s)"
+  grep '✗' /tmp/dehoard-scan.$$ | head -3
+fi
+rm -f /tmp/dehoard-scan.$$
+
 if zsh "${0:A:h}/stress-apply.zsh" "$SCRIPT" > /tmp/dehoard-stress.$$ 2>&1; then
   ok "--apply stress test: real deletion, every category, guards in harm's way"
 else

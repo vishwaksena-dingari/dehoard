@@ -2507,12 +2507,15 @@ if $MODELS; then
     echo ""
     LMS_SIZE=$(du -sh ~/.lmstudio/models 2>/dev/null | cut -f1)
     echo "$(c_head "── LM Studio models (${LMS_SIZE}) ──")"
-    find ~/.lmstudio/models -name "*.gguf" 2>/dev/null | while IFS= read -r f; do
+    # LM Studio stores models at models/<publisher>/<repo>/<file>.gguf, so depth 4 covers the real
+    # layout with a margin. Unbounded, this walks whatever else the user has put under models/ -
+    # and it runs three times across the report, JSON and delete paths.
+    find ~/.lmstudio/models -maxdepth 4 -name "*.gguf" 2>/dev/null | while IFS= read -r f; do
       printf "  %-8s %s\n" "$(du -sh "$f" 2>/dev/null | cut -f1)" "${f/#$HOME\/.lmstudio\/models\//}"
     done
     if _ask "Delete all LM Studio .gguf files?"; then
       if $DRY_RUN; then
-        find ~/.lmstudio/models -name "*.gguf" 2>/dev/null | while IFS= read -r f; do
+        find ~/.lmstudio/models -maxdepth 4 -name "*.gguf" 2>/dev/null | while IFS= read -r f; do
           echo "  [dry-run] would delete: $f"
         done
       else
@@ -2522,7 +2525,7 @@ if $MODELS; then
         local f
         while IFS= read -r -d '' f; do
           _rm "$f"
-        done < <(find ~/.lmstudio/models -name "*.gguf" -print0 2>/dev/null)
+        done < <(find ~/.lmstudio/models -maxdepth 4 -name "*.gguf" -print0 2>/dev/null)
         echo "  Done. Re-download models from the LM Studio app."
       fi
     fi
