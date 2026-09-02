@@ -1,15 +1,15 @@
 #!/usr/bin/env zsh
-# dehoard: disk reclaimer for ML/dev Macs (zsh, macOS). https://github.com/vishwaksena-dingari/dehoard
-# Run under zsh defaults regardless of the user's ~/.zshenv (which IS sourced for `zsh dehoard.sh`).
+# scree: disk reclaimer for ML/dev Macs (zsh, macOS). https://github.com/vishwaksena-dingari/scree
+# Run under zsh defaults regardless of the user's ~/.zshenv (which IS sourced for `zsh scree.sh`).
 # This neutralizes options a user may have set globally (KSH_ARRAYS, SH_WORD_SPLIT, ...) that would
 # otherwise corrupt array indexing / globbing and silently produce invalid --json or skip space-paths.
 emulate zsh
 # Unmatched globs expand to nothing instead of erroring (e.g. empty Trash, no screenshots).
-# The one non-default option dehoard relies on, re-applied after `emulate` resets options.
+# The one non-default option scree relies on, re-applied after `emulate` resets options.
 setopt NULL_GLOB
 
 # Version, keep in sync with the CHANGELOG release heading and the git tag.
-DEHOARD_VERSION="0.2.10"
+SCREE_VERSION="0.2.10"
 
 # ─── USER CONFIG ────────────────────────────────────────────────────────────
 # Extra directories to include when scanning for projects (git gc, etc.).
@@ -18,43 +18,43 @@ EXTRA_SCAN_DIRS=()
 # Standard project roots scanned for large-repo git gc (override freely):
 GIT_GC_ROOTS=(~/Documents ~/src ~/Desktop ~/Developer "${EXTRA_SCAN_DIRS[@]}")
 # Generic cache sweep (report + --scan): ignore cache dirs smaller than this many MB.
-# Env-overridable, e.g.  CACHE_MIN_MB=250 dehoard --scan
+# Env-overridable, e.g.  CACHE_MIN_MB=250 scree --scan
 : ${CACHE_MIN_MB:=100}
 # Wall-clock timeout (seconds) for each external package-manager cleanup (brew/npm/yarn/
 # trunk/...). Guards against a single tool hanging the whole run. Env-overridable:
-#   DEHOARD_PM_TIMEOUT=300 dehoard --apply
-: ${DEHOARD_PM_TIMEOUT:=120}
-# Per-process floor (GB) before dehoard reports a process holding deleted-but-still-open files.
+#   SCREE_PM_TIMEOUT=300 scree --apply
+: ${SCREE_PM_TIMEOUT:=120}
+# Per-process floor (GB) before scree reports a process holding deleted-but-still-open files.
 # Those blocks stay allocated, so `df` under-reports until the holder exits. Calibrated on an idle
 # developer Mac (~1.5 GB of ambient held inodes is normal; noisiest single process measured 0.43 GB).
 # Raise it if a machine running Docker, a database, or a long-lived browser makes this routine:
-#   DEHOARD_HELD_OPEN_MIN_GB=20 dehoard --report
-: ${DEHOARD_HELD_OPEN_MIN_GB:=5}
-# Minimum size (MB) for a VM/container disk image to be listed in --report. Report-only; dehoard
+#   SCREE_HELD_OPEN_MIN_GB=20 scree --report
+: ${SCREE_HELD_OPEN_MIN_GB:=5}
+# Minimum size (MB) for a VM/container disk image to be listed in --report. Report-only; scree
 # never deletes these. Exposed mainly so the code path is reachable in tests.
-: ${DEHOARD_VM_IMAGE_MIN_MB:=500}
+: ${SCREE_VM_IMAGE_MIN_MB:=500}
 # Seconds any single directory-size measurement may take before it is abandoned as "unknown".
 # Deletion still proceeds; only the reported figure is lost.
-: ${DEHOARD_SIZE_TIMEOUT:=20}
+: ${SCREE_SIZE_TIMEOUT:=20}
 # Seconds the --report cache-ranking sweep may take per root before it is abandoned. Exceeding it
 # shortens that section rather than producing a wrong figure.
-: ${DEHOARD_SWEEP_TIMEOUT:=45}
+: ${SCREE_SWEEP_TIMEOUT:=45}
 # Seconds any single directory-size measurement may take before it is abandoned as "unknown".
 # Deletion still proceeds; only the reported figure is lost.
-: ${DEHOARD_SIZE_TIMEOUT:=20}
+: ${SCREE_SIZE_TIMEOUT:=20}
 # Set to 'true' to make --apply the default so you don't have to type it every run.
-# Add  export DEHOARD_APPLY_DEFAULT=true  to your ~/.zshrc to make it permanent.
-# Override back to safe preview for a single run:  DEHOARD_APPLY_DEFAULT=false dehoard
-: ${DEHOARD_APPLY_DEFAULT:=false}
+# Add  export SCREE_APPLY_DEFAULT=true  to your ~/.zshrc to make it permanent.
+# Override back to safe preview for a single run:  SCREE_APPLY_DEFAULT=false scree
+: ${SCREE_APPLY_DEFAULT:=false}
 # Set to 'false' to disable the ignore list entirely, no "Always skip?" prompts will
 # appear, the ignore file will never be written, and any existing file is ignored.
 # Useful if you want a fully stateless tool or manage exclusions another way.
-: ${DEHOARD_IGNORE_ENABLED:=true}
+: ${SCREE_IGNORE_ENABLED:=true}
 # Compared, never executed. `if $_IGNORE_ON && …` would RUN the value as a
-# command, so `DEHOARD_IGNORE_ENABLED=/some/prog` executes that program. Same class as the numeric
-# arithmetic issue this release fixes, and the same treatment DEHOARD_APPLY_DEFAULT already gets:
+# command, so `SCREE_IGNORE_ENABLED=/some/prog` executes that program. Same class as the numeric
+# arithmetic issue this release fixes, and the same treatment SCREE_APPLY_DEFAULT already gets:
 # collapse the knob to one internal boolean here, and test that everywhere else.
-if [[ "$DEHOARD_IGNORE_ENABLED" == true ]]; then _IGNORE_ON=true; else _IGNORE_ON=false; fi
+if [[ "$SCREE_IGNORE_ENABLED" == true ]]; then _IGNORE_ON=true; else _IGNORE_ON=false; fi
 typeset -r _IGNORE_ON
 # Numeric env vars are validated as literal integers before ANY of them reaches a `$(( ))`
 # or `(( ))` context. This is a safety guard, not input hygiene: zsh evaluates a variable's
@@ -67,16 +67,16 @@ typeset -r _IGNORE_ON
 _num_or_default() {   # $1=var name, $2=fallback; resets the var and warns if it isn't <->
   local _n="$1"
   [[ "${(P)_n}" == <-> ]] && return
-  echo "dehoard: ignoring non-numeric ${_n}='${(P)_n}', using ${2}." >&2
+  echo "scree: ignoring non-numeric ${_n}='${(P)_n}', using ${2}." >&2
   eval "$_n=$2"
 }
 _num_or_default CACHE_MIN_MB 100
-_num_or_default DEHOARD_PM_TIMEOUT 120
-_num_or_default DEHOARD_HELD_OPEN_MIN_GB 5
-_num_or_default DEHOARD_VM_IMAGE_MIN_MB 500
-_num_or_default DEHOARD_SIZE_TIMEOUT 20
-_num_or_default DEHOARD_SWEEP_TIMEOUT 45
-_num_or_default DEHOARD_SIZE_TIMEOUT 20
+_num_or_default SCREE_PM_TIMEOUT 120
+_num_or_default SCREE_HELD_OPEN_MIN_GB 5
+_num_or_default SCREE_VM_IMAGE_MIN_MB 500
+_num_or_default SCREE_SIZE_TIMEOUT 20
+_num_or_default SCREE_SWEEP_TIMEOUT 45
+_num_or_default SCREE_SIZE_TIMEOUT 20
 # ─────────────────────────────────────────────────────────────────────────────
 
 # macOS only, enforced here and not just in install.sh. Every path table, `stat -f`, `lsof +L1`,
@@ -85,47 +85,47 @@ _num_or_default DEHOARD_SIZE_TIMEOUT 20
 # string) - so on Linux this would misbehave quietly rather than fail. install.sh already refuses
 # non-Darwin, but the documented "download the one file and read it first" path bypassed that.
 if [[ "$(uname)" != "Darwin" ]]; then
-  echo "dehoard is macOS-only (it depends on Darwin paths, stat, lsof and xcrun). Refusing to run." >&2
+  echo "scree is macOS-only (it depends on Darwin paths, stat, lsof and xcrun). Refusing to run." >&2
   exit 1
 fi
 
 # Safety: must not run as root, breaks Homebrew, npm, pip
 if [[ $EUID -eq 0 ]]; then
-  echo "❌ Do not run this script as root (sudo zsh dehoard.sh)."
+  echo "❌ Do not run this script as root (sudo zsh scree.sh)."
   echo "   It breaks Homebrew, npm, and pip. Run as your normal user."
   exit 1
 fi
 
 # Usage (preview-by-default, nothing deleted without --apply):
-#   dehoard                        → Tier 1 preview (always safe)
-#   dehoard --apply                → Tier 1, actually reclaim
-#   dehoard --deep                 → + Tier 2 (urgent space needed)
-#   dehoard --models               → + interactive LLM model cleanup
-#   dehoard --scan                 → + interactive environment/artifact scan
-#   dehoard --report               → read-only disk audit
-#   dehoard --deep --models --scan --apply → everything, for real
+#   scree                        → Tier 1 preview (always safe)
+#   scree --apply                → Tier 1, actually reclaim
+#   scree --deep                 → + Tier 2 (urgent space needed)
+#   scree --models               → + interactive LLM model cleanup
+#   scree --scan                 → + interactive environment/artifact scan
+#   scree --report               → read-only disk audit
+#   scree --deep --models --scan --apply → everything, for real
 
 # ── Help text (heredoc; the --help dispatch is just below) ──
 usage() {
-cat <<'DEHOARD_HELP'
+cat <<'SCREE_HELP'
 
 ╔══════════════════════════════════════════════════════════════╗
-║                    dehoard  reclaimer                       ║
+║                    scree  reclaimer                       ║
 ╚══════════════════════════════════════════════════════════════╝
 
 USAGE   (preview-by-default: NOTHING is deleted without --apply)
-  dehoard                          → PREVIEW Tier 1 (always-safe) cleanup
-  dehoard --apply                  → actually reclaim Tier 1 space
-  dehoard --deep                   → + Tier 2 aggressive caches (preview)
-  dehoard --models                 → + interactive LLM/ML model cleanup
-  dehoard --scan                   → + interactive project artifact scan
-  dehoard --report                 → read-only disk audit (what's eating space)
-    ↳ bare 'dehoard' PREVIEWS the cleanup; '--report' AUDITS your disk. Neither deletes.
-  dehoard --deep --models --scan --apply → everything, for real
+  scree                          → PREVIEW Tier 1 (always-safe) cleanup
+  scree --apply                  → actually reclaim Tier 1 space
+  scree --deep                   → + Tier 2 aggressive caches (preview)
+  scree --models                 → + interactive LLM/ML model cleanup
+  scree --scan                   → + interactive project artifact scan
+  scree --report                 → read-only disk audit (what's eating space)
+    ↳ bare 'scree' PREVIEWS the cleanup; '--report' AUDITS your disk. Neither deletes.
+  scree --deep --models --scan --apply → everything, for real
 
 FLAGS
   --apply         actually delete (default is preview-only)
-  --dry-run       force preview, overrides --apply and DEHOARD_APPLY_DEFAULT
+  --dry-run       force preview, overrides --apply and SCREE_APPLY_DEFAULT
   --yes / -y      auto-confirm every prompt (combine with --apply; use with care)
   --pick          interactive fzf picker for --scan candidates: ONE picker per category, biggest first
                   (implies --scan; needs fzf + --apply). Interactive-only: runs JUST the pickers, not
@@ -134,40 +134,40 @@ FLAGS
                   Falls back to per-item prompts without fzf; under --dry-run it just previews the list.
   --report        read-only audit; never deletes
   --json          machine-readable model inventory (implies --report; pure JSON on stdout)
-                  e.g. dehoard --json | jq '.cross_tool_duplicates'
+                  e.g. scree --json | jq '.cross_tool_duplicates'
   --trash         move deletions to ~/.Trash instead of removing them (undo-able).
                   NOTE: a trashed file still occupies its blocks, so this frees NOTHING until you
                   empty the Trash. Reported separately from "Storage freed" for that reason.
   --snapshot      same as --json, and also archives the document to
-                  ~/.cache/dehoard/snapshots/<UTC-timestamp>.json. Run it on a schedule to
+                  ~/.cache/scree/snapshots/<UTC-timestamp>.json. Run it on a schedule to
                   see what regrew between two dates:
                     diff <(jq -S . old.json) <(jq -S . new.json)
   --list-ignored       show paths you've marked 'always skip'
   --unignore <path>    remove one path from the always-skip list
   --reset-ignore       clear the entire always-skip list and re-prompt everything
-  --uninstall          remove dehoard: the deletion logs (~/.cache/dehoard) and the script. Keeps
-                       your ignore list (~/.config/dehoard); preview-first, --dry-run to see the plan
+  --uninstall          remove scree: the deletion logs (~/.cache/scree) and the script. Keeps
+                       your ignore list (~/.config/scree); preview-first, --dry-run to see the plan
   --purge              like --uninstall, but ALSO removes your ignore list (prints it first)
   --version / -V       print version and exit
 
 ENVIRONMENT
   Every knob is an environment variable; there are no config files. Numeric ones must be bare
   integers (a non-numeric value is reported on stderr and the default is used instead).
-    DEHOARD_APPLY_DEFAULT       false  'true' makes --apply the default (--dry-run still wins)
-    DEHOARD_IGNORE_ENABLED      true   'false' disables the always-skip list entirely
+    SCREE_APPLY_DEFAULT       false  'true' makes --apply the default (--dry-run still wins)
+    SCREE_IGNORE_ENABLED      true   'false' disables the always-skip list entirely
     CACHE_MIN_MB                100    minimum size (MB) for a cache dir to be listed
-    DEHOARD_PM_TIMEOUT          120    seconds before one hung package-manager cleanup is skipped
-    DEHOARD_HELD_OPEN_MIN_GB    5      per-process floor (GB) for the held-open-files warning
-    DEHOARD_VM_IMAGE_MIN_MB     500    minimum size (MB) for a VM/container disk image to be listed
-    DEHOARD_SIZE_TIMEOUT        20     seconds before one directory-size probe is abandoned
-    DEHOARD_SWEEP_TIMEOUT       45     seconds before --report's cache-ranking sweep is abandoned
-    DEHOARD_XCODE_DEVICESUPPORT_KEEP 2  iOS device-support versions to keep (1-3 GB each)
-    DEHOARD_DEBUG               unset  set to any value to trace skipped paths on stderr
-    DEHOARD_SIZE_TIMEOUT        20     seconds before one directory-size probe is abandoned
+    SCREE_PM_TIMEOUT          120    seconds before one hung package-manager cleanup is skipped
+    SCREE_HELD_OPEN_MIN_GB    5      per-process floor (GB) for the held-open-files warning
+    SCREE_VM_IMAGE_MIN_MB     500    minimum size (MB) for a VM/container disk image to be listed
+    SCREE_SIZE_TIMEOUT        20     seconds before one directory-size probe is abandoned
+    SCREE_SWEEP_TIMEOUT       45     seconds before --report's cache-ranking sweep is abandoned
+    SCREE_XCODE_DEVICESUPPORT_KEEP 2  iOS device-support versions to keep (1-3 GB each)
+    SCREE_DEBUG               unset  set to any value to trace skipped paths on stderr
+    SCREE_SIZE_TIMEOUT        20     seconds before one directory-size probe is abandoned
     NO_COLOR / CLICOLOR_FORCE   unset  disable / force terminal color
     XDG_CACHE_HOME              ~/.cache   holds run logs + --snapshot archives
     XDG_CONFIG_HOME             ~/.config  holds the ignore list
-  e.g.  DEHOARD_HELD_OPEN_MIN_GB=20 dehoard --report
+  e.g.  SCREE_HELD_OPEN_MIN_GB=20 scree --report
 
 Flags combine in any order. Without --apply, every run is a safe preview.
 Recommended: run once to preview, then add --apply. Tier 1 always runs first.
@@ -360,7 +360,7 @@ TIER 2: Only with --deep. There is a real cost after deletion.
      whose runtime is no longer installed. Never deletes active simulators.
      Also clears ~/Library/Developer/CoreSimulator/Caches.
      Does NOT remove runtimes themselves. Runtimes are the big ones (tens of
-     GB) and Xcode silently reinstalls them on update. dehoard leaves them
+     GB) and Xcode silently reinstalls them on update. scree leaves them
      alone because 'simctl runtime delete all' cannot be scoped to unused
      ones or previewed per-item. To clear them yourself:
        xcrun simctl runtime list          # see what is installed
@@ -603,7 +603,7 @@ SCAN (--scan): Crawls your project tree. Per-entry prompts.
      Leftover data dirs of dev/ML tools whose binary/app is gone (e.g.
      ~/.ollama after Ollama is removed). Conservative: only flags tools
      reliably detectable as absent. General app-uninstall leftovers are
-     out of scope, a dedicated app uninstaller is the right tool; dehoard
+     out of scope, a dedicated app uninstaller is the right tool; scree
      does not scan all of ~/Library.
 
   ── Tool caches >100 MB (~/.cache, ~/Library/Caches) ── PER ENTRY
@@ -618,7 +618,7 @@ SCAN (--scan): Crawls your project tree. Per-entry prompts.
 
   • Close Chrome and Brave before running (for clone deletion)
   • You will be prompted for sudo password once (for tmutil)
-  • Do NOT run as: sudo zsh dehoard.sh, breaks Homebrew/npm/pip
+  • Do NOT run as: sudo zsh scree.sh, breaks Homebrew/npm/pip
   • Safe to run repeatedly, missing paths are silently skipped
   • Free space is measured before and after; shown at the end
   • --dry-run works with any flag combo, shows what would be
@@ -635,11 +635,11 @@ SCAN (--scan): Crawls your project tree. Per-entry prompts.
 Provided "as is", without warranty (MIT). Deletion is real rm, preview first;
 you are responsible for what you delete. See LICENSE.
 
-DEHOARD_HELP
+SCREE_HELP
 }
 
 if [[ "$1" == "--help" || "$1" == "-h" ]]; then usage; exit 0; fi
-if [[ "$1" == "--version" || "$1" == "-V" ]]; then echo "dehoard ${DEHOARD_VERSION}"; exit 0; fi
+if [[ "$1" == "--version" || "$1" == "-V" ]]; then echo "scree ${SCREE_VERSION}"; exit 0; fi
 
 _SELF="${0:A}"     # absolute, symlink-resolved path of THIS script (captured at top level: inside a
                    # function zsh's $0 is the function name, so --uninstall could not find it later)
@@ -647,9 +647,26 @@ _SELF="${0:A}"     # absolute, symlink-resolved path of THIS script (captured at
 # config. Keeping them apart lets --uninstall delete the cache freely while preserving config by
 # default (apt remove vs purge). XDG_* vars are usually unset on macOS, so these default to the
 # familiar ~/.cache and ~/.config.
-_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/dehoard"        # run-*.log deletion records (exhaust)
-_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/dehoard"     # the ignore list (hand-authored intent)
+_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/scree"        # run-*.log deletion records (exhaust)
+_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/scree"     # the ignore list (hand-authored intent)
 _IGNORE_FILE="$_CONFIG_DIR/ignore"
+
+# One-time migration from the previous name. The ignore list is HAND-AUTHORED intent - the paths a
+# user deliberately told this tool never to touch - so silently losing it on a rename would turn a
+# cosmetic change into a data-loss risk: the next run would happily delete everything they had
+# protected. Moved, not copied, so it cannot drift into two files that disagree.
+#
+# Only the config is migrated. The cache holds run logs, which are exhaust: regenerating them costs
+# nothing and carrying them over would misattribute old runs to the new name.
+if [[ ! -d "$_CONFIG_DIR" ]]; then
+  _legacy_cfg="${XDG_CONFIG_HOME:-$HOME/.config}/dehoard"
+  if [[ -d "$_legacy_cfg" && -f "$_legacy_cfg/ignore" ]]; then
+    if mkdir -p "${_CONFIG_DIR:h}" 2>/dev/null && mv "$_legacy_cfg" "$_CONFIG_DIR" 2>/dev/null; then
+      echo "  ⓘ  migrated your ignore list from ~/.config/dehoard to ~/.config/scree" >&2
+    fi
+  fi
+  unset _legacy_cfg
+fi
 _SNAP_DIR="$_CACHE_DIR/snapshots"                           # --snapshot archives (exhaust, like run-*.log)
 # --snapshot sink. stdin is the --json document; pass it through unchanged so piping still
 # works, and additionally archive it when asked. Collecting is cheap and unrecoverable if
@@ -659,7 +676,7 @@ _snapshot_sink() {
   if ! $SNAPSHOT; then cat; return; fi
   if ! mkdir -p "$_SNAP_DIR" 2>/dev/null; then
     cat                                                     # never let archiving break the report
-    echo "dehoard: could not create ${_SNAP_DIR/#$HOME/~}, snapshot not saved." >&2
+    echo "scree: could not create ${_SNAP_DIR/#$HOME/~}, snapshot not saved." >&2
     return
   fi
   # Whole-second timestamps collide when two runs land in the same second (a loop, or a launchd
@@ -671,9 +688,9 @@ _snapshot_sink() {
   # Report what actually happened: `tee` can fail on a full or read-only volume, and announcing a
   # file that does not exist is worse than announcing nothing.
   if tee "$_f"; then
-    echo "dehoard: snapshot saved to ${_f/#$HOME/~}" >&2  # stderr, so stdout stays pure JSON
+    echo "scree: snapshot saved to ${_f/#$HOME/~}" >&2  # stderr, so stdout stays pure JSON
   else
-    echo "dehoard: snapshot NOT saved (could not write ${_f/#$HOME/~})." >&2
+    echo "scree: snapshot NOT saved (could not write ${_f/#$HOME/~})." >&2
   fi
 }
 # One-time migration: the ignore list used to live under ~/.cache; it is config, so move it to the
@@ -706,12 +723,12 @@ for arg in "$@"; do
   [[ "$arg" == "--snapshot" ]]         && { SNAPSHOT=true; JSON=true; REPORT=true; }  # archive that report to disk
   if [[ "$arg" == "--reset-ignore" ]]; then
     rm -f "$_IGNORE_FILE"
-    echo "dehoard: ignore list cleared."; exit 0
+    echo "scree: ignore list cleared."; exit 0
   fi
   if [[ "$arg" == "--list-ignored" ]]; then
     local _ign="$_IGNORE_FILE"
     if [[ -f "$_ign" ]]; then
-      echo "Paths in dehoard ignore list (${_IGNORE_FILE/#$HOME/~}):"
+      echo "Paths in scree ignore list (${_IGNORE_FILE/#$HOME/~}):"
       sed "s|^${HOME}|~|" "$_ign"
     else
       echo "No ignore list, say 'y' to 'Always skip?' after declining a prompt with --apply."
@@ -726,26 +743,26 @@ if (( ${@[(I)--unignore]} )); then
   local _ui_idx=$(( ${@[(i)--unignore]} + 1 ))
   local _ui_raw="${@[$_ui_idx]:-}"
   if [[ -z "$_ui_raw" || "$_ui_raw" == --* ]]; then
-    echo "dehoard: --unignore requires a path  (e.g. dehoard --unignore ~/.cache/huggingface)"; exit 1
+    echo "scree: --unignore requires a path  (e.g. scree --unignore ~/.cache/huggingface)"; exit 1
   fi
   # Normalize: expand leading ~, strip trailing slash, matches how ignore list stores paths
   local _ui_path="${_ui_raw/#\~/$HOME}"; _ui_path="${_ui_path%/}"
   local _ign="$_IGNORE_FILE"
   if [[ ! -f "$_ign" ]]; then
-    echo "dehoard: no ignore list found (nothing to remove)."; exit 0
+    echo "scree: no ignore list found (nothing to remove)."; exit 0
   fi
   if ! grep -qxF "$_ui_path" "$_ign" 2>/dev/null; then
-    echo "dehoard: '${_ui_path/#$HOME/~}' is not in the ignore list."; exit 1
+    echo "scree: '${_ui_path/#$HOME/~}' is not in the ignore list."; exit 1
   fi
   grep -vxF "$_ui_path" "$_ign" > "${_ign}.tmp"; mv "${_ign}.tmp" "$_ign"
   [[ -s "$_ign" ]] || rm -f "$_ign"            # remove file entirely if now empty
-  echo "dehoard: removed '${_ui_path/#$HOME/~}' from ignore list."
+  echo "scree: removed '${_ui_path/#$HOME/~}' from ignore list."
   exit 0
 fi
 
 # SAFETY: preview-by-default. Nothing is deleted unless --apply is given (or
-# DEHOARD_APPLY_DEFAULT=true is set). --dry-run always wins and forces preview.
-[[ "${DEHOARD_APPLY_DEFAULT:-false}" == true ]] && APPLY=true   # env opt-in (compared, not run); --dry-run below overrides
+# SCREE_APPLY_DEFAULT=true is set). --dry-run always wins and forces preview.
+[[ "${SCREE_APPLY_DEFAULT:-false}" == true ]] && APPLY=true   # env opt-in (compared, not run); --dry-run below overrides
 $APPLY || DRY_RUN=true
 $DRY_RUN && APPLY=false                          # --dry-run beats everything, always
 # Freeze the preview/delete flag now that it is final. This is the ROOT fix for the class of bug
@@ -798,7 +815,7 @@ for arg in "$@"; do
   (( ${_VALID_FLAGS[(Ie)$arg]} )) || echo "⚠️  Unknown flag: '$arg' (ignored, did you mean --scan or --deep?)" >&2
 done
 
-$REPORT || echo "$(c_head "🧹 dehoard: disk reclaimer for ML/dev Macs")"
+$REPORT || echo "$(c_head "🧹 scree: disk reclaimer for ML/dev Macs")"
 if ! $JSON; then   # --json: stdout must be PURE JSON, no banners
   $DEEP       && echo "$(c_warn "⚠️  Deep mode: aggressive cache wipe enabled")"
   $MODELS     && echo "$(c_bold "🤖 Models mode: interactive LLM/ML model cleanup enabled")"
@@ -820,16 +837,16 @@ if ! $REPORT; then
     local _ign_n; _ign_n=$(wc -l < "$_ign_startup" | tr -d ' ')
     if (( _ign_n > 0 )); then
       printf "⊘  Ignore list active: %d path(s) will be skipped without prompting.\n" "$_ign_n"
-      printf "   Review: dehoard --list-ignored   Remove one: dehoard --unignore <path>   Clear all: dehoard --reset-ignore\n"
+      printf "   Review: scree --list-ignored   Remove one: scree --unignore <path>   Clear all: scree --reset-ignore\n"
     fi
   fi
 fi
 $JSON || echo ""   # blank separator for humans; never on stdout under --json (must be pure JSON)
 
 BEFORE=$(df -k / | awk 'NR==2 {print $4}')
-# Honest reclaim accounting: sum of the sizes of what dehoard ACTUALLY deletes (KB), tallied as it
+# Honest reclaim accounting: sum of the sizes of what scree ACTUALLY deletes (KB), tallied as it
 # deletes. The final "Storage freed" reports THIS, not a whole-disk `df` delta, which would otherwise
-# credit dehoard for ambient disk churn (browsers, Spotlight, other processes) during the run.
+# credit scree for ambient disk churn (browsers, Spotlight, other processes) during the run.
 _FREED_KB=0
 _TRASHED_KB=0
 # Deletion log (only in --apply mode), a record of what was removed, when.
@@ -837,7 +854,7 @@ LOGFILE=""
 if $APPLY; then
   LOGDIR="$_CACHE_DIR"
   mkdir -p "$LOGDIR" 2>/dev/null && LOGFILE="$LOGDIR/run-$(date +%Y%m%d-%H%M%S).log"
-  [[ -n "$LOGFILE" ]] && echo "# dehoard run $(date), flags: $*" > "$LOGFILE"
+  [[ -n "$LOGFILE" ]] && echo "# scree run $(date), flags: $*" > "$LOGFILE"
 fi
 TMPDIR="${TMPDIR:-/tmp}"      # default if unset (CI/cron/restored sessions), _rm whitelist still guards
 TMPDIR="${TMPDIR%/}/"         # normalize: ensure exactly one trailing slash
@@ -865,7 +882,7 @@ _ask() {  # $1=question, $2=optional path for always-skip check
   local _sp="${${2:-}%/}"                                      # strip trailing slash for consistent matching
   local _ign="$_IGNORE_FILE"
   # Check ignore list, always announce the skip so nothing is hidden from the user.
-  # Skipped entirely when DEHOARD_IGNORE_ENABLED=false (stateless mode).
+  # Skipped entirely when SCREE_IGNORE_ENABLED=false (stateless mode).
   if $_IGNORE_ON && [[ -n "$_sp" && -f "$_ign" ]] \
      && grep -qxF "$_sp" "$_ign" 2>/dev/null; then
     printf "  ⊘ always-skip (%s)\n" "${_sp/#$HOME/~}"
@@ -888,7 +905,7 @@ _ask() {  # $1=question, $2=optional path for always-skip check
       if [[ "$SKIP_REPLY" == "y" ]]; then
         mkdir -p "$_CONFIG_DIR"
         printf '%s\n' "$_sp" >> "$_ign"
-        printf "  ↪ Added to ignore list. Use 'dehoard --reset-ignore' to clear.\n"
+        printf "  ↪ Added to ignore list. Use 'scree --reset-ignore' to clear.\n"
       fi
     fi
     [[ "$REPLY" == "y" ]]
@@ -898,7 +915,7 @@ _ask() {  # $1=question, $2=optional path for always-skip check
   fi
 }
 
-# Remove dehoard and everything it ever wrote. The ONLY targets are two fixed, hardcoded paths under
+# Remove scree and everything it ever wrote. The ONLY targets are two fixed, hardcoded paths under
 # $HOME (never user-derived): the cache dir (regenerable logs), and, when the running copy is the
 # standard install, the script itself. Following the apt remove/purge convention, the user-authored
 # ignore list (config) is KEPT by default and announced; --purge also removes it (after echoing it, so
@@ -914,10 +931,10 @@ _uninstall() {
   local _dry=false _purge=false
   (( ${@[(I)--dry-run]} )) && _dry=true
   (( ${@[(I)--purge]} ))   && _purge=true
-  local _std="${HOME}/.local/bin/dehoard"
+  local _std="${HOME}/.local/bin/scree"
   local -a _targets=()
   local _keep_self="" _keep_config=""
-  echo "$(c_head "dehoard uninstall")"
+  echo "$(c_head "scree uninstall")"
   echo "  Will remove:"
   if [[ -d "$_CACHE_DIR" ]]; then
     # Normally remove the whole cache dir. But if the user pointed XDG_CACHE_HOME and XDG_CONFIG_HOME
@@ -927,7 +944,7 @@ _uninstall() {
     if ! $_purge && [[ "${_CONFIG_DIR:A}" == "${_CACHE_DIR:A}" || "${_IGNORE_FILE:A}" == "${_CACHE_DIR:A}/"* ]]; then
       echo "    ${_CACHE_DIR/#$HOME/~}/run-*.log  (deletion logs; the ignore list in this dir is kept)"
       _targets+=("$_CACHE_DIR"/run-*.log(N))
-      # --snapshot archives are dehoard's own exhaust too. Without this the narrowed branch leaves
+      # --snapshot archives are scree's own exhaust too. Without this the narrowed branch leaves
       # them behind, so uninstalling a disk cleaner would litter. Announced separately so the
       # preview text still matches exactly what gets removed.
       if [[ -d "$_SNAP_DIR" ]]; then
@@ -951,7 +968,7 @@ _uninstall() {
     _keep_self="$_SELF"
   fi
   # The ignore list is user-authored config: keep it unless --purge. Under --purge, echo it first so
-  # the only irreplaceable thing dehoard owns is never destroyed without the user seeing it.
+  # the only irreplaceable thing scree owns is never destroyed without the user seeing it.
   if [[ -f "$_IGNORE_FILE" ]]; then
     if $_purge; then
       echo "    $(du -sh "$_CONFIG_DIR" 2>/dev/null | cut -f1)  ${_CONFIG_DIR/#$HOME/~}  (ignore list, --purge)"
@@ -993,7 +1010,7 @@ _uninstall() {
     fi
     # Only ever the fixed, hardcoded paths built above (under $HOME, never user-derived).
     rm -rf "${_targets[@]}"
-    echo "$(c_safe "dehoard uninstalled.")"
+    echo "$(c_safe "scree uninstalled.")"
     [[ -n "$_keep_self" ]]   && echo "  (left ${_keep_self/#$HOME/~}, remove it manually)"
     [[ -n "$_keep_config" ]] && echo "  (kept your ignore list at ${_keep_config/#$HOME/~})"
   else
@@ -1053,13 +1070,13 @@ _OPEN_FILES_LOADED=false
 # that in memory to substring-match it per candidate is both slower and needlessly large.
 #
 # Deliberate tradeoff: this is a SNAPSHOT. A process that opens a database after the scan is not
-# seen. That is acceptable because dehoard targets caches of apps the user is not actively using,
+# seen. That is acceptable because scree targets caches of apps the user is not actively using,
 # and the alternative - a correct guard so slow nobody keeps it on - protects nothing.
 _load_open_files() {
   $_OPEN_FILES_LOADED && return 0
   _OPEN_FILES_LOADED=true
 command -v lsof &>/dev/null || return 1
-  _OPEN_FILES_SNAPSHOT_FILE="${TMPDIR:-/tmp}/dehoard-openfiles.$$"
+  _OPEN_FILES_SNAPSHOT_FILE="${TMPDIR:-/tmp}/scree-openfiles.$$"
   lsof -nP -Fn 2>/dev/null | sed -n 's/^n//p' > "$_OPEN_FILES_SNAPSHOT_FILE" 2>/dev/null
   [[ -s "$_OPEN_FILES_SNAPSHOT_FILE" ]]
 }
@@ -1171,7 +1188,7 @@ _rm() {
       fi
     fi
     # Refuse `..` traversal so the string-prefix whitelist below can't be walked out of a safe root.
-    # Purely additive (only ever deletes LESS); dehoard's real targets come from canonical globs.
+    # Purely additive (only ever deletes LESS); scree's real targets come from canonical globs.
     # Resolve the path physically BEFORE the whitelist, so an ancestor symlink cannot redirect a
     # deletion. Concretely: if ~/Library/Caches is a symlink to ~/Documents, then a cache sweep
     # deleting "~/Library/Caches/x" destroys "~/Documents/x" while the allow-list happily approves
@@ -1231,7 +1248,7 @@ _rm() {
     done
     # Safe-root whitelist (centralized, defends against a mis-computed $BASE/$TMPDIR,
     # e.g. TMPDIR unset → BASE='/' → '//C/...'; such paths are NOT under a safe root).
-    # Everything dehoard legitimately deletes lives under $HOME or a per-user temp root.
+    # Everything scree legitimately deletes lives under $HOME or a per-user temp root.
     case "$target" in
       "$HOME"/*|/var/folders/*|/private/var/folders/*|/tmp/*|/private/tmp/*) ;;
       *) echo "$(c_warn "  ⚠️  refusing path outside safe roots (\$HOME, var/folders, tmp): '$target'")" >&2
@@ -1297,7 +1314,7 @@ _rm() {
         # was wrong. The suite had simply become slow enough to be killed mid-run, leaving cleanup
         # unfinished so the canaries LOOKED deleted; and the supposed underlying cause, a
         # _run_timeout deadlock on large output, could not be reproduced at all.
-        _szk=$(_run_timeout "${DEHOARD_SIZE_TIMEOUT:-20}" du -sk "$target" 2>/dev/null | cut -f1)
+        _szk=$(_run_timeout "${SCREE_SIZE_TIMEOUT:-20}" du -sk "$target" 2>/dev/null | cut -f1)
       fi
       # B7: a failed or timed-out measurement must read as UNKNOWN, never as 0. Logging a multi-GB
       # delete as "0KB" makes the run log lie about the one thing it exists to record.
@@ -1321,7 +1338,7 @@ _rm() {
       # incoherent, and it silently renames the item instead of reclaiming it, so the Trash could
       # never be emptied. Anything already in the Trash is deleted for real even in trash mode.
       if $TRASH_MODE && [[ "${target:A}" != "${HOME:A}/.Trash/"* ]]; then
-        # Opt-in undo. Deliberately NOT the default: dehoard is a re-claimer, and a file in
+        # Opt-in undo. Deliberately NOT the default: scree is a re-claimer, and a file in
         # ~/.Trash still occupies its blocks, so trashing frees nothing until the Trash is
         # emptied. Counted separately from _FREED_KB for exactly that reason, and reported as
         # "moved" rather than "freed", so the headline number never claims space you don't have.
@@ -1359,7 +1376,7 @@ _rm() {
 # `timeout`; prefer it / gtimeout when installed, else poll a backgrounded child. Returns
 # the command's own exit code, or 124 if it was killed for exceeding $1 seconds.
 # Deleted-but-still-open files keep their blocks allocated, so `df` under-reports free space
-# until the holding process exits. dehoard cannot reclaim these, and the gap is invisible: the
+# until the holding process exits. scree cannot reclaim these, and the gap is invisible: the
 # author once lost 8 hours to a process sitting on 26 GB of deleted inodes while df "showed"
 # the disk filling. This states the fact and names the process. It never suggests killing
 # anything and never acts, deciding to end a process is the user's call, not a cleaner's.
@@ -1375,7 +1392,7 @@ _rm() {
 # baseline: noisiest single process 0.43 GB; the real incident was 26 GB in one process.
 # The knob itself lives in the USER CONFIG block at the top with every other one; only the
 # derived byte value is computed here, next to its single consumer.
-_HELD_OPEN_MIN_BYTES=$(( DEHOARD_HELD_OPEN_MIN_GB * 1073741824 ))   # ~11x the measured noisiest process
+_HELD_OPEN_MIN_BYTES=$(( SCREE_HELD_OPEN_MIN_GB * 1073741824 ))   # ~11x the measured noisiest process
 _held_open_report() {               # echoes "<bytes>\t<command> (pid N)" for the worst offender, or nothing
   command -v lsof &>/dev/null || return
   # Dedup on device+inode: lsof emits ONE record per descriptor AND per mmap, each carrying the
@@ -1427,10 +1444,10 @@ _warn_held_open() {
   # freely (argv[0]). zsh's `echo` expands backslash sequences, so a process named `x\e[2J` would
   # clear the user's terminal mid-report. `print -r --` emits the bytes verbatim.
   print -r -- "$(c_warn "⚠️  $(printf '%.1f' $(( _bytes / 1073741824.0 ))) GB is held by deleted files still open in ${_who}.")"
-  print -r -- "$(c_dim  "   df under-reports free space until that process exits. dehoard cannot reclaim it.")"
+  print -r -- "$(c_dim  "   df under-reports free space until that process exits. scree cannot reclaim it.")"
   # Name the knob here: someone who considers this routine (Docker, a database, a long-lived
   # browser) otherwise has no in-tool route to the threshold, and --help is meant to be canonical.
-  print -r -- "$(c_dim  "   Routine on this machine? Raise the floor: DEHOARD_HELD_OPEN_MIN_GB=20")"
+  print -r -- "$(c_dim  "   Routine on this machine? Raise the floor: SCREE_HELD_OPEN_MIN_GB=20")"
 }
 
 _run_timeout() {
@@ -1452,7 +1469,7 @@ _run_timeout() {
   done
   # Kill the DESCENDANTS as well as the direct child. A wrapper script (`#!/bin/sh` + real tool)
   # means the thing actually blocking is a GRANDCHILD, and killing only $pid orphans it. The orphan
-  # keeps the inherited stdout open, so every reader of dehoard's output blocks until it exits: the
+  # keeps the inherited stdout open, so every reader of scree's output blocks until it exits: the
   # timeout returns 124 on schedule while the run still appears frozen. Measured with a hung
   # `docker info` — _run_timeout returned promptly and the run still stalled for 300s.
   # Collect children BEFORE killing the parent; once it dies they reparent and -P finds nothing.
@@ -1467,17 +1484,17 @@ _run_timeout() {
 _pm_run() {
   local label="$1"; shift
   command -v "$1" &>/dev/null || return 0
-  local rc; _run_timeout "$DEHOARD_PM_TIMEOUT" "$@" 2>/dev/null; rc=$?
-  (( rc == 124 )) && echo "  $(c_warn "skipped ${label}: timed out after ${DEHOARD_PM_TIMEOUT}s (run it manually if needed)")"
+  local rc; _run_timeout "$SCREE_PM_TIMEOUT" "$@" 2>/dev/null; rc=$?
+  (( rc == 124 )) && echo "  $(c_warn "skipped ${label}: timed out after ${SCREE_PM_TIMEOUT}s (run it manually if needed)")"
   return 0
 }
 
 # --- Interactive multiselect (--pick): one fzf picker per scan category, biggest first. --------
 # fzf is optional: when absent (or no TTY) we fall back to the per-section per-item prompts.
-# DEHOARD_FORCE_PICKER=1 lifts the TTY requirement for the hermetic test suite only.
+# SCREE_FORCE_PICKER=1 lifts the TTY requirement for the hermetic test suite only.
 _have_picker() {
   command -v fzf &>/dev/null || return 1
-  [[ -n "${DEHOARD_FORCE_PICKER:-}" ]] && return 0
+  [[ -n "${SCREE_FORCE_PICKER:-}" ]] && return 0
   [[ -t 0 && -t 1 ]]
 }
 
@@ -1639,7 +1656,7 @@ _run_picker() {
   done
 }
 
-# Graceful exit on Ctrl+C or SIGTERM: report freed space so far (from dehoard's own deletion tally,
+# Graceful exit on Ctrl+C or SIGTERM: report freed space so far (from scree's own deletion tally,
 # not a df delta, same honesty rule as print_result).
 # B8: a sticky cancel flag. _cleanup_exit exits directly, but a signal delivered while a child is
 # running can be absorbed by a `|| true` / `2>/dev/null` best-effort wrapper, so the sweep carries
@@ -1667,7 +1684,7 @@ _hkb() {  # kb -> human
 # guard that fired. When the disk stays full the question is "why didn't it take X?", which the
 # normal output cannot answer. Env var rather than a flag on purpose: no parser surface, nothing to
 # document in --help, and it can be removed later without a breaking change.
-_dbg() { [[ -n "${DEHOARD_DEBUG-}" ]] && print -r -u2 -- "[dbg] $*"; return 0; }
+_dbg() { [[ -n "${SCREE_DEBUG-}" ]] && print -r -u2 -- "[dbg] $*"; return 0; }
 
 _cleanup_exit() {
   _CANCELLED=true
@@ -1706,7 +1723,7 @@ if $REPORT; then
   # network mount under ~ holds it open forever - demonstrated with a stubbed du that never returns.
   # On timeout the section is short or empty, which is the right failure for a report: less
   # information, never a wrong number, never an indefinite hang.
-  _run_timeout "${DEHOARD_SWEEP_TIMEOUT:-45}" du -h -d 2 ~ 2>/dev/null | sort -rh | head -30
+  _run_timeout "${SCREE_SWEEP_TIMEOUT:-45}" du -h -d 2 ~ 2>/dev/null | sort -rh | head -30
 
   echo ""
   echo "$(c_head "━━ Regenerable caches present (SAFE to clean) ━━")"
@@ -1716,7 +1733,7 @@ if $REPORT; then
     # Bounded like every other sizing call here. _report_cache is invoked ~15 times per run, so an
     # unbounded du in it can hold a read-only audit open indefinitely - which is exactly what a
     # hung-du test demonstrated after the sweep alone was bounded: 308s instead of the 3s limit.
-    local _rk; _rk=$(_run_timeout "${DEHOARD_SIZE_TIMEOUT:-20}" du -sk "$1" 2>/dev/null | cut -f1)
+    local _rk; _rk=$(_run_timeout "${SCREE_SIZE_TIMEOUT:-20}" du -sk "$1" 2>/dev/null | cut -f1)
     printf "  %-7s %-30s %s\n" "$(_hkb "${_rk:-x}")" "$2" "$3"
   }
   _report_cache ~/Library/Caches                                                        "~/Library/Caches/*"   "--deep"
@@ -1728,18 +1745,18 @@ if $REPORT; then
   _report_cache ~/Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw       "Docker disk image"    "manual (see --deep)"
   # VM / container disk images under Application Support. Report-only, never auto-deleted:
   # the extension is a reliable signal that a file is a runtime substrate, but nothing on
-  # disk says whether THIS one is disposable, so dehoard states the size and stops there.
+  # disk says whether THIS one is disposable, so scree states the size and stops there.
   # Covers apps no rule lists (Claude Desktop's claudevm.bundle, OrbStack, Lima, UTM, ...).
   #   Scoped deliberately: this tree at depth 4 costs ~0.4s, while ~/Library/Containers
   #   costs ~52s (796 sandboxed app containers), so Docker stays hardcoded above.
   #   du, not ls: these are sparse. Docker.raw reads 1.0T apparent vs 8.4G real.
-  #   Floor is a knob (DEHOARD_VM_IMAGE_MIN_MB) purely so this path is testable: a fixture cannot
+  #   Floor is a knob (SCREE_VM_IMAGE_MIN_MB) purely so this path is testable: a fixture cannot
   #   realistically write a 500 MB file, and `du -sk` reports ALLOCATED blocks so a sparse stand-in
   #   measures ~0. Without a knob this branch could only ever be verified by hand.
   local _img _ikb _rel
   while IFS= read -r -d '' _img; do          # -print0/read -d '': "Application Support" has a space
-    _ikb=$(_run_timeout "${DEHOARD_SIZE_TIMEOUT:-20}" du -sk "$_img" 2>/dev/null | cut -f1)
-    (( ${_ikb:-0} >= DEHOARD_VM_IMAGE_MIN_MB * 1024 )) || continue
+    _ikb=$(_run_timeout "${SCREE_SIZE_TIMEOUT:-20}" du -sk "$_img" 2>/dev/null | cut -f1)
+    (( ${_ikb:-0} >= SCREE_VM_IMAGE_MIN_MB * 1024 )) || continue
     # Label with the owning APP (first component under Application Support), not the
     # immediate parent: "Claude" is actionable, "vm_bundles" is not.
     _rel="${_img#$HOME/Library/Application Support/}"
@@ -1756,7 +1773,7 @@ if $REPORT; then
   # does not have Autodesk on it, which this one does not. Reporting the total is useful and safe;
   # guessing at deletion rules for a 60 GB tree, untested, is not.
   if [[ -d ~/Library/Application\ Support/Autodesk/webdeploy/production ]]; then
-    local _ad_kb; _ad_kb=$(_run_timeout "${DEHOARD_SIZE_TIMEOUT:-20}" du -sk ~/Library/Application\ Support/Autodesk/webdeploy/production 2>/dev/null | cut -f1)
+    local _ad_kb; _ad_kb=$(_run_timeout "${SCREE_SIZE_TIMEOUT:-20}" du -sk ~/Library/Application\ Support/Autodesk/webdeploy/production 2>/dev/null | cut -f1)
     if [[ "$_ad_kb" == <-> ]] && (( _ad_kb > 512000 )); then
       echo ""
       echo "$(c_head "── Autodesk webdeploy ──")"
@@ -1825,7 +1842,7 @@ if $REPORT; then
       printf "  %8s  %d director%s found, %d sampled\n" \
         "$(_hkb "$_asum")$_plus" "${#_art[@]}" "$([[ ${#_art[@]} == 1 ]] && echo y || echo ies)" "$_asampled"
       echo "$(c_dim "  node_modules / target / .venv. Regenerable by a rebuild. Sampled, so the")"
-      echo "$(c_dim "  figure is a floor, not a total. Review and remove with: dehoard --scan --pick --apply")"
+      echo "$(c_dim "  figure is a floor, not a total. Review and remove with: scree --scan --pick --apply")"
     fi
   fi
 
@@ -1840,7 +1857,7 @@ if $REPORT; then
     # be unbounded - a stalled network mount or a pathological tree would otherwise hold a READ-ONLY
     # audit open indefinitely. On timeout the section is simply shorter, which is the right failure
     # mode for a report: less information, never a wrong number and never a hang.
-    _run_timeout "${DEHOARD_SWEEP_TIMEOUT:-45}" du -sk "$cache_root"/*/ 2>/dev/null | sort -rn | head -8 | while read kb cdir; do
+    _run_timeout "${SCREE_SWEEP_TIMEOUT:-45}" du -sk "$cache_root"/*/ 2>/dev/null | sort -rn | head -8 | while read kb cdir; do
       (( kb >= CACHE_MIN_MB * 1024 )) && printf "  %-7s %-30s %s\n" \
         "$(_hkb "$kb")" "${cdir/#$HOME/~}" "--scan (generic)"
     done
@@ -1854,7 +1871,7 @@ if $REPORT; then
     [[ -f "$ext_dir/.obsolete" || -f "$ext_dir/extensions.json" ]] || continue
     _ed_found=true
     printf "  %-16s %6s  last changed %s\n" "${${ext_dir:h}:t}" \
-      "$(_hkb "$(_run_timeout "${DEHOARD_SIZE_TIMEOUT:-20}" du -sk "$ext_dir" 2>/dev/null | cut -f1)")" \
+      "$(_hkb "$(_run_timeout "${SCREE_SIZE_TIMEOUT:-20}" du -sk "$ext_dir" 2>/dev/null | cut -f1)")" \
       "$(stat -f '%Sm' -t '%Y-%m-%d' "$ext_dir" 2>/dev/null)"
   done
   $_ed_found || echo "  (no VS Code-family editors found)"
@@ -1875,7 +1892,7 @@ if $REPORT; then
     # ONE walk, not two. This ran `du -sk` and then `du -sh` over the same tree for a single row -
     # the identical defect already fixed in _rm - so every model root was measured twice. The human
     # string comes from the KB figure via _hkb. Bounded, so one stalled tree cannot hold --report.
-    local kb; kb=$(_run_timeout "${DEHOARD_SIZE_TIMEOUT:-20}" du -sk "$1" 2>/dev/null | cut -f1)
+    local kb; kb=$(_run_timeout "${SCREE_SIZE_TIMEOUT:-20}" du -sk "$1" 2>/dev/null | cut -f1)
     [[ "$kb" == <-> ]] || return
     (( kb > 0 )) || return
     _mw_total_kb=$(( _mw_total_kb + kb ))
@@ -1964,13 +1981,13 @@ if $REPORT; then
   }
   for d in ~/.cache/huggingface/hub/models--*(N/); do
     nm="${${d:t}#models--}"; nm="${nm//--//}"
-    _mdl_add HF "$nm" "$(_run_timeout "${DEHOARD_SIZE_TIMEOUT:-20}" du -sk "$d" 2>/dev/null | cut -f1)" "$d"
+    _mdl_add HF "$nm" "$(_run_timeout "${SCREE_SIZE_TIMEOUT:-20}" du -sk "$d" 2>/dev/null | cut -f1)" "$d"
   done
   for f in ~/.lmstudio/models/**/*.gguf(N.); do
-    _mdl_add LMStudio "${f:t:r}" "$(_run_timeout "${DEHOARD_SIZE_TIMEOUT:-20}" du -sk "$f" 2>/dev/null | cut -f1)" "$f"
+    _mdl_add LMStudio "${f:t:r}" "$(_run_timeout "${SCREE_SIZE_TIMEOUT:-20}" du -sk "$f" 2>/dev/null | cut -f1)" "$f"
   done
   for f in ~/.cache/torch/hub/checkpoints/*(N.); do
-    _mdl_add PyTorch "${f:t:r}" "$(_run_timeout "${DEHOARD_SIZE_TIMEOUT:-20}" du -sk "$f" 2>/dev/null | cut -f1)" "$f"
+    _mdl_add PyTorch "${f:t:r}" "$(_run_timeout "${SCREE_SIZE_TIMEOUT:-20}" du -sk "$f" 2>/dev/null | cut -f1)" "$f"
   done
   if command -v ollama &>/dev/null; then
     # NOTE: declare these ONCE before the loop. A bare `local onm…` re-run each
@@ -1993,7 +2010,7 @@ if $REPORT; then
     if $_ollama_found && [[ -d ~/.ollama/models ]]; then
       # Sum the Ollama rows out of _mdl_list (entry = tool\tdisplay\tkb\tquant\tvariant\tpath).
       local _oll_real_kb _oll_sum_kb=0 _ok _oline; local -a _of
-      _oll_real_kb=$(_run_timeout "${DEHOARD_SIZE_TIMEOUT:-20}" du -sk ~/.ollama/models 2>/dev/null | cut -f1)
+      _oll_real_kb=$(_run_timeout "${SCREE_SIZE_TIMEOUT:-20}" du -sk ~/.ollama/models 2>/dev/null | cut -f1)
       for _ok in ${(k)_mdl_list}; do
         for _oline in "${(@f)${_mdl_list[$_ok]%$'\n'}}"; do
           _of=("${(@s:	:)_oline}")
@@ -2059,14 +2076,14 @@ if $REPORT; then
     {
     printf '{\n'
     printf '  "schema_version": 1,\n'
-    printf '  "generated_by": "dehoard",\n'
+    printf '  "generated_by": "scree",\n'
     printf '  "generated_at": "%s",\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf '  "models": [%s],\n' "${(j:,:)_json_models}"
     printf '  "cross_tool_duplicates": [%s],\n' "${(j:,:)_json_dups}"
     printf '  "related_variants": [%s],\n' "${(j:,:)_json_rels}"
     printf '  "total_reclaim_bytes": %d,\n' "$(( _dup_reclaim_kb * 1024 ))"
     # Additive field (no schema_version bump; existing consumers are unaffected). Bytes locked in
-    # deleted-but-still-open files: NOT reclaimable by dehoard, and the reason df can disagree with
+    # deleted-but-still-open files: NOT reclaimable by scree, and the reason df can disagree with
     # any tally. 0 when nothing is held or lsof is unavailable.
     printf '  "held_open_deleted_bytes": %d,\n' "$(_held_open_total_bytes)"
     # Ollama is content-addressed, so per-model sizes in models[] include SHARED layers and their
@@ -2082,7 +2099,7 @@ if $REPORT; then
     echo ""
     echo "$(c_head "━━ True cross-tool duplicate models (same build in 2+ tools) ━━")"
     echo "   Same family, size, quant & variant, safe to keep one. VERIFY, then remove the"
-    echo "   redundant copy via --models; dehoard never auto-deletes weights."
+    echo "   redundant copy via --models; scree never auto-deletes weights."
     printf "%s" "$_dup_buf"
     echo "  ────────"
     printf "  ⭐ Potential reclaim from cross-tool duplicates: ~%s\n" "$(_hkb $_dup_reclaim_kb)"
@@ -2098,7 +2115,7 @@ if $REPORT; then
   # ── Orphaned app caches (read-only count), apps removed, caches left behind ──
   # Map every installed .app to its CFBundleIdentifier, then flag ~/Library/Caches
   # folders named like a bundle id with no matching app. Report-only & count-only:
-  # dehoard stays dev/ML-scoped; removing general app leftovers is out of scope (a job for a
+  # scree stays dev/ML-scoped; removing general app leftovers is out of scope (a job for a
   # dedicated app uninstaller).
   # Collect the CANDIDATE cache dirs FIRST, and only pay for app enumeration if there are any.
   # `defaults read` forks per app - ~57 apps here - and doing that unconditionally made --report
@@ -2120,7 +2137,7 @@ if $REPORT; then
   # turns the second and later runs into a single file read.
   typeset -A _inst_bid
   if (( ${#_cand[@]} )); then
-    local _bidcache="${XDG_CACHE_HOME:-$HOME/.cache}/dehoard/installed-bundle-ids"
+    local _bidcache="${XDG_CACHE_HOME:-$HOME/.cache}/scree/installed-bundle-ids"
     local -a _fresh=("$_bidcache"(Nmm-60))          # regenerate if older than 60 minutes
     if (( ${#_fresh[@]} )); then
       while IFS= read -r _bid; do [[ -n "$_bid" ]] && _inst_bid[$_bid]=1; done < "$_bidcache"
@@ -2151,7 +2168,7 @@ if $REPORT; then
     _skip=false
     for _i in ${(k)_inst_bid}; do [[ "$_i" == "$_vendor".* ]] && { _skip=true; break }; done
     $_skip && continue
-    _ckb=$(_run_timeout "${DEHOARD_SIZE_TIMEOUT:-20}" du -sk "$_c" 2>/dev/null | cut -f1); (( _ckb >= 10240 )) || continue   # ignore <10MB noise
+    _ckb=$(_run_timeout "${SCREE_SIZE_TIMEOUT:-20}" du -sk "$_c" 2>/dev/null | cut -f1); (( _ckb >= 10240 )) || continue   # ignore <10MB noise
     _orphan_names+=("$_ckb|$_name")
     (( _orphan_cache_kb += _ckb, _orphan_cache_n++ ))
   done
@@ -2166,7 +2183,7 @@ if $REPORT; then
     for _o in ${(On)_orphan_names}; do
       printf "    %8s  %s\n" "$(_hkb ${_o%%|*})" "${_o#*|}"
     done
-    echo "  Read-only, dehoard stays dev/ML-scoped; general app leftovers are a job for a dedicated app uninstaller."
+    echo "  Read-only, scree stays dev/ML-scoped; general app leftovers are a job for a dedicated app uninstaller."
     echo "  Bundle-id to app mapping is imperfect - verify the app is really gone before removing one."
   fi
 
@@ -2175,7 +2192,7 @@ if $REPORT; then
   if [[ -f "$_ign" ]]; then
     local _ign_n; _ign_n=$(wc -l < "$_ign" | tr -d ' ')
     echo ""
-    printf "  ℹ️  Ignore list: %d path(s) always-skipped  (dehoard --list-ignored to review, --reset-ignore to clear)\n" "$_ign_n"
+    printf "  ℹ️  Ignore list: %d path(s) always-skipped  (scree --list-ignored to review, --reset-ignore to clear)\n" "$_ign_n"
   fi
 
   echo ""
@@ -2452,14 +2469,14 @@ if $DEEP; then
   # Xcode re-copies them off the device on next connect. Keep the newest N (default 2) so recent
   # devices still debug without a re-copy. Sorted by mtime, NOT by version string: version sorting
   # mis-ranks betas and is the same trap avoided for VS Code extensions and CLI versions.
-  : ${DEHOARD_XCODE_DEVICESUPPORT_KEEP:=2}
-  _num_or_default DEHOARD_XCODE_DEVICESUPPORT_KEEP 2
+  : ${SCREE_XCODE_DEVICESUPPORT_KEEP:=2}
+  _num_or_default SCREE_XCODE_DEVICESUPPORT_KEEP 2
   local _dsroot _keep _i
   for _dsroot in ~/Library/Developer/Xcode/*\ DeviceSupport(N/); do
     local -a _vers; _vers=("${_dsroot%/}"/*(N/om))     # om = newest mtime first
-    (( ${#_vers[@]} > DEHOARD_XCODE_DEVICESUPPORT_KEEP )) || continue
-    echo "  ${_dsroot:t}: keeping the newest ${DEHOARD_XCODE_DEVICESUPPORT_KEEP} of ${#_vers[@]}"
-    for (( _i = DEHOARD_XCODE_DEVICESUPPORT_KEEP + 1; _i <= ${#_vers[@]}; _i++ )); do
+    (( ${#_vers[@]} > SCREE_XCODE_DEVICESUPPORT_KEEP )) || continue
+    echo "  ${_dsroot:t}: keeping the newest ${SCREE_XCODE_DEVICESUPPORT_KEEP} of ${#_vers[@]}"
+    for (( _i = SCREE_XCODE_DEVICESUPPORT_KEEP + 1; _i <= ${#_vers[@]}; _i++ )); do
       _rm "${_vers[_i]}"
     done
   done
@@ -2500,7 +2517,7 @@ if $DEEP; then
     if $DRY_RUN; then
       echo "  [dry-run] would run: nix-collect-garbage --delete-older-than 30d"
     else
-      _run_timeout "${DEHOARD_PM_TIMEOUT:-120}" nix-collect-garbage --delete-older-than 30d 2>/dev/null
+      _run_timeout "${SCREE_PM_TIMEOUT:-120}" nix-collect-garbage --delete-older-than 30d 2>/dev/null
     fi
   fi
 
@@ -3038,7 +3055,7 @@ if $SCAN; then
       2>/dev/null | sort -u
   )"})
   if $_COLLECT; then
-    echo "$(c_dim "  Skipped in --pick (not a picker category); run plain 'dehoard --scan' to clean these.")"
+    echo "$(c_dim "  Skipped in --pick (not a picker category); run plain 'scree --scan' to clean these.")"
   elif (( ${#PYC_FILES[@]} == 0 )); then
     echo "$(c_dim "  None found.")"
   else
@@ -3230,7 +3247,7 @@ if $SCAN; then
   echo ""
   echo "$(c_head "── IPython command history ──")"
   if $_COLLECT; then
-    echo "$(c_dim "  Skipped in --pick (not a picker category); run plain 'dehoard --scan' to clean this.")"
+    echo "$(c_dim "  Skipped in --pick (not a picker category); run plain 'scree --scan' to clean this.")"
   elif [[ -f ~/.ipython/profile_default/history.sqlite ]]; then
     IPYTHON_SIZE=$(du -sh ~/.ipython/profile_default/history.sqlite 2>/dev/null | cut -f1)
     echo "  ~/.ipython/profile_default/history.sqlite (${IPYTHON_SIZE})"
@@ -3284,7 +3301,7 @@ if $SCAN; then
       2>/dev/null | sort -u
   )"})
   if $_COLLECT; then
-    echo "$(c_dim "  Skipped in --pick (not a picker category); run plain 'dehoard --scan' to clean these.")"
+    echo "$(c_dim "  Skipped in --pick (not a picker category); run plain 'scree --scan' to clean these.")"
   elif (( ${#TEX_FILES[@]} == 0 )); then
     echo "$(c_dim "  None found.")"
   else
@@ -3309,7 +3326,7 @@ if $SCAN; then
       2>/dev/null | sort -u
   )"})
   if $_COLLECT; then
-    echo "$(c_dim "  Skipped in --pick (not a picker category); run plain 'dehoard --scan' to clean these.")"
+    echo "$(c_dim "  Skipped in --pick (not a picker category); run plain 'scree --scan' to clean these.")"
   elif (( ${#MACOS_JUNK[@]} == 0 )); then
     echo "$(c_dim "  None found.")"
   else
@@ -3482,7 +3499,7 @@ if $SCAN; then
   # ── Orphaned dev/ML tool data (tool gone, data dir left behind) ──
   # NARROW + conservative: only tools whose absence is reliably detectable (binary
   # NOT on PATH *and* no matching .app). General app-uninstall leftovers are out of
-  # scope (a dedicated app uninstaller's job); dehoard intentionally does NOT scan all of ~/Library.
+  # scope (a dedicated app uninstaller's job); scree intentionally does NOT scan all of ~/Library.
   echo ""
   echo "$(c_head "── Orphaned dev/ML tool data (binary/app missing, data remains) ──")"
   echo "  General app leftovers are out of scope (use a dedicated app uninstaller); this is dev/ML tools only."
@@ -3562,8 +3579,8 @@ print_result() {
 # Result
 # ══════════════════════════════════════════════════════
 
-# "Storage freed" reflects what dehoard ACTUALLY deleted (the $_FREED_KB tally, summed in _rm and the
-# native-uninstaller branches), NOT a whole-disk df delta, which would credit dehoard for ambient disk
+# "Storage freed" reflects what scree ACTUALLY deleted (the $_FREED_KB tally, summed in _rm and the
+# native-uninstaller branches), NOT a whole-disk df delta, which would credit scree for ambient disk
 # churn during the run (the user once saw "freed 860 KB" after deleting nothing). The df figure is kept
 # only as ambient "Free space now" context, clearly separated from the reclaim number.
 FREED_MB=$(( _FREED_KB / 1024 ))
@@ -3613,7 +3630,7 @@ else
     elif (( FREED_MB > 0 ));     then _notify_amt="${FREED_MB} MB"
     else                              _notify_amt="${_FREED_KB} KB"
     fi
-    osascript -e "display notification \"Freed ${_notify_amt}, $(df -h / | awk 'NR==2 {print $4}') free\" with title \"dehoard ✅\"" 2>/dev/null
+    osascript -e "display notification \"Freed ${_notify_amt}, $(df -h / | awk 'NR==2 {print $4}') free\" with title \"scree ✅\"" 2>/dev/null
   fi
 fi
 }

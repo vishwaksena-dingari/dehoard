@@ -1,20 +1,20 @@
 #!/usr/bin/env zsh
-# dehoard test harness, proves the deleter is safe.
+# scree test harness, proves the deleter is safe.
 #
-# Runs dehoard against a THROWAWAY $HOME fixture and asserts:
+# Runs scree against a THROWAWAY $HOME fixture and asserts:
 #   - preview (no --apply) deletes nothing
 #   - --apply removes a regenerable Tier-1 cache (~/.npm/_npx)
 #   - user data (model weights, session files, $HOME itself) ALWAYS survives
 #   - an unset TMPDIR (mis-computed $BASE) never causes a delete outside safe roots
 #
 # Hermetic: runs with a restricted PATH so external package managers (brew/npm/go/uv)
-# are NOT found (command -v guards skip them), the test exercises only dehoard's own
+# are NOT found (command -v guards skip them), the test exercises only scree's own
 # file-deletion logic and never touches the real machine's caches.
 #
 # Usage:  zsh test/run.zsh
 set -u
-SCRIPT="${0:A:h}/../dehoard.sh"
-[[ -f "$SCRIPT" ]] || { echo "cannot find dehoard.sh next to test/"; exit 2; }
+SCRIPT="${0:A:h}/../scree.sh"
+[[ -f "$SCRIPT" ]] || { echo "cannot find scree.sh next to test/"; exit 2; }
 # A stub directory PREPENDED to the safe PATH, holding no-op versions of the package managers that
 # ship inside /usr/bin. The comment below used to claim this PATH excluded package managers, and it
 # excluded brew/npm/go/uv/cargo - but pip3 and gem live in /usr/bin, so every single --apply in this
@@ -54,17 +54,17 @@ trap 'rm -rf "$_NOTIFY_STUB" "$_FIXTURE_TMPDIR" "$_PM_STUBS"' EXIT INT TERM
 # Canaries in the REAL environment. _assert_sandbox is wired into run(), but only 2 of ~100
 # invocations use run() — wrapping the other 98 would be fragile and a newly-written test would
 # silently escape anyway. So instead of guarding each call site, assert the PROPERTY at the end:
-# nothing the suite ran deleted a real file. These live at paths dehoard's Tier 1 genuinely
+# nothing the suite ran deleted a real file. These live at paths scree's Tier 1 genuinely
 # targets, so a hermeticity regression destroys them and the final check fails loudly, whichever
 # invocation caused it — including ones that do not exist yet.
 # The canary must sit at a path Tier 1 ACTUALLY targets, not merely inside the real TMPDIR:
-# dehoard removes `${TMPDIR}hsperfdata_*` by glob, so a uniquely-suffixed name matches that glob
+# scree removes `${TMPDIR}hsperfdata_*` by glob, so a uniquely-suffixed name matches that glob
 # while never colliding with a real JVM perf dir. A canary nested one level deeper would survive a
 # genuine hermeticity break and prove nothing (the first version of this check made that mistake).
 _REAL_TMPDIR="${_REAL_TMPDIR_ORIG%/}/"
-_CANARY_TMP="${_REAL_TMPDIR}hsperfdata_dehoardsuitecanary"
+_CANARY_TMP="${_REAL_TMPDIR}hsperfdata_screesuitecanary"
 mkdir -p "$_CANARY_TMP" 2>/dev/null && : > "$_CANARY_TMP/probe"
-_CANARY_REAL_HOME_MARK="$_REAL_HOME/.dehoard-suite-canary"
+_CANARY_REAL_HOME_MARK="$_REAL_HOME/.scree-suite-canary"
 : > "$_CANARY_REAL_HOME_MARK" 2>/dev/null
 
 PASS=0 FAIL=0
@@ -101,9 +101,9 @@ run() {
   HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" "$@" >/dev/null 2>&1
 }
 
-# Stub harness: fake every external tool dehoard shells out to. Each stub logs
+# Stub harness: fake every external tool scree shells out to. Each stub logs
 # "<name> <args>" to $STUB_LOG and exits 0 (so e.g. `docker info` "succeeds").
-# Tests run dehoard with PATH="$STUBDIR:$SAFE_PATH" so these intercept the real
+# Tests run scree with PATH="$STUBDIR:$SAFE_PATH" so these intercept the real
 # tools, letting us assert the DESTRUCTIVE paths (brew/npm/docker/sudo-tmutil)
 # without touching the real machine. sudo is stubbed too, so --deep can't mutate
 # the system or hang on a password prompt.
@@ -234,10 +234,10 @@ rm -rf "$FIX"
 
 # 5f, ignore list: path in ignore file is silently skipped; --reset-ignore clears it
 FIX=$(mktemp -d)
-mkdir -p "$FIX/.cache/huggingface" "$FIX/.config/dehoard"
+mkdir -p "$FIX/.cache/huggingface" "$FIX/.config/scree"
 dd if=/dev/zero of="$FIX/.cache/huggingface/x" bs=1024 count=200000 2>/dev/null  # 200 MB
 # Pre-populate ignore list, no trailing slash (matches _ask normalization)
-printf '%s\n' "$FIX/.cache/huggingface" > "$FIX/.config/dehoard/ignore"
+printf '%s\n' "$FIX/.cache/huggingface" > "$FIX/.config/scree/ignore"
 # Dry-run should show ⊘ marker and NOT delete
 dry_out=$(HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --scan --dry-run 2>/dev/null)
 [[ "$dry_out" == *"always-skip"* ]] && ok "ignored path shows ⊘ always-skip in dry-run" \
@@ -249,7 +249,7 @@ after=$(find "$FIX/.cache/huggingface" -type f 2>/dev/null | wc -l | tr -d ' ')
                              || bad "DELETED an always-skipped path!"
 # --reset-ignore clears the file
 HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --reset-ignore >/dev/null 2>&1
-[[ ! -f "$FIX/.config/dehoard/ignore" ]] && ok "--reset-ignore cleared the ignore file" \
+[[ ! -f "$FIX/.config/scree/ignore" ]] && ok "--reset-ignore cleared the ignore file" \
                                          || bad "--reset-ignore did not clear ignore file"
 rm -rf "$FIX"
 
@@ -259,25 +259,25 @@ mkdir -p "$FIX/.cache/test"
 dd if=/dev/zero of="$FIX/.cache/test/x" bs=1024 count=200000 2>/dev/null  # 200 MB
 HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --report >/dev/null 2>&1
 HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" >/dev/null 2>&1  # bare preview
-[[ ! -f "$FIX/.config/dehoard/ignore" ]] \
+[[ ! -f "$FIX/.config/scree/ignore" ]] \
   && ok "--report and bare preview never create ignore file" \
   || bad "--report or bare preview wrote to ignore file (should not)"
 rm -rf "$FIX"
 
 # 5h, --unignore removes one path, leaves others intact; empty file is deleted
 FIX=$(mktemp -d)
-mkdir -p "$FIX/.config/dehoard"
+mkdir -p "$FIX/.config/scree"
 printf '%s\n%s\n' "$FIX/.cache/huggingface" "$FIX/.cache/torch" \
-  > "$FIX/.config/dehoard/ignore"                                           # two entries
+  > "$FIX/.config/scree/ignore"                                           # two entries
 HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --unignore "$FIX/.cache/huggingface" >/dev/null 2>&1
-[[ -f "$FIX/.config/dehoard/ignore" ]] && \
-  ! grep -qxF "$FIX/.cache/huggingface" "$FIX/.config/dehoard/ignore" && \
-    grep -qxF "$FIX/.cache/torch" "$FIX/.config/dehoard/ignore" \
+[[ -f "$FIX/.config/scree/ignore" ]] && \
+  ! grep -qxF "$FIX/.cache/huggingface" "$FIX/.config/scree/ignore" && \
+    grep -qxF "$FIX/.cache/torch" "$FIX/.config/scree/ignore" \
   && ok "--unignore removes one path, keeps the other" \
   || bad "--unignore failed: wrong file state"
 # removing the last entry cleans up the file
 HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --unignore "$FIX/.cache/torch" >/dev/null 2>&1
-[[ ! -f "$FIX/.config/dehoard/ignore" ]] \
+[[ ! -f "$FIX/.config/scree/ignore" ]] \
   && ok "--unignore deletes ignore file when last entry removed" \
   || bad "--unignore left empty ignore file behind"
 rm -rf "$FIX"
@@ -335,7 +335,7 @@ if command -v python3 >/dev/null 2>&1; then
   [[ "$before" == "$after" ]] && ok "--json is read-only (deletes nothing)" || bad "--json deleted files!"
 
   # A typo'd flag must not corrupt the --json data contract. The unknown-flag warning used to
-  # go to stdout, so `dehoard --json --typo` emitted a warning line + JSON and failed to parse.
+  # go to stdout, so `scree --json --typo` emitted a warning line + JSON and failed to parse.
   HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --json --nosuchflag 2>/dev/null | python3 -m json.tool >/dev/null 2>&1 \
     && ok "unknown-flag warning goes to stderr, --json stays parseable" \
     || bad "unknown flag polluted --json stdout"
@@ -345,15 +345,15 @@ if command -v python3 >/dev/null 2>&1; then
   print -r -- "$snapout" | python3 -m json.tool >/dev/null 2>&1 \
     && ok "--snapshot keeps stdout pure JSON (still pipeable)" \
     || bad "--snapshot polluted stdout"
-  snapfiles=("$FIX"/.cache/dehoard/snapshots/*.json(N))
+  snapfiles=("$FIX"/.cache/scree/snapshots/*.json(N))
   (( ${#snapfiles[@]} == 1 )) && python3 -m json.tool < "${snapfiles[1]}" >/dev/null 2>&1 \
     && ok "--snapshot archives one valid JSON document under \$XDG_CACHE_HOME" \
     || bad "--snapshot did not archive a valid document"
 
   # --json alone must NOT archive anything (snapshotting is opt-in).
-  rm -rf "$FIX"/.cache/dehoard/snapshots
+  rm -rf "$FIX"/.cache/scree/snapshots
   HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --json >/dev/null 2>&1
-  [[ ! -d "$FIX/.cache/dehoard/snapshots" ]] \
+  [[ ! -d "$FIX/.cache/scree/snapshots" ]] \
     && ok "--json does not archive (snapshot is opt-in)" \
     || bad "--json wrote a snapshot without being asked"
   rm -rf "$FIX"
@@ -476,7 +476,7 @@ _rm_iso "$FIX" "$FIX/Cache" >/dev/null 2>&1
 kill -9 $_HOLDER 2>/dev/null; wait $_HOLDER 2>/dev/null
 rm -rf "$FIX"
 
-# ...and the inverse, or the guard would simply stop dehoard cleaning anything.
+# ...and the inverse, or the guard would simply stop scree cleaning anything.
 FIX=$(mktemp -d); mkdir -p "$FIX/Cache"; echo dbdata > "$FIX/Cache/Cache.db"
 _rm_iso "$FIX" "$FIX/Cache" >/dev/null 2>&1
 [[ ! -e "$FIX/Cache" ]] \
@@ -560,12 +560,12 @@ rm -rf "$FIX"
 FIX=$(mktemp -d); DS="$FIX/Library/Developer/Xcode/iOS DeviceSupport"; mkdir -p "$DS"
 for v in 16.0 17.0 18.0 19.0; do mkdir -p "$DS/$v"; sleep 0.05; touch "$DS/$v"; done
 out=$(zsh -c 'emulate zsh; setopt NULL_GLOB
-  DEHOARD_XCODE_DEVICESUPPORT_KEEP=2
+  SCREE_XCODE_DEVICESUPPORT_KEEP=2
   _rm(){ print -r -- "DEL:${1:t}"; }
   for _dsroot in '"$FIX"'/Library/Developer/Xcode/*\ DeviceSupport(N/); do
     _vers=("${_dsroot%/}"/*(N/om))
-    (( ${#_vers[@]} > DEHOARD_XCODE_DEVICESUPPORT_KEEP )) || continue
-    for (( _i = DEHOARD_XCODE_DEVICESUPPORT_KEEP + 1; _i <= ${#_vers[@]}; _i++ )); do _rm "${_vers[_i]}"; done
+    (( ${#_vers[@]} > SCREE_XCODE_DEVICESUPPORT_KEEP )) || continue
+    for (( _i = SCREE_XCODE_DEVICESUPPORT_KEEP + 1; _i <= ${#_vers[@]}; _i++ )); do _rm "${_vers[_i]}"; done
   done')
 [[ "$out" == *"DEL:16.0"* && "$out" == *"DEL:17.0"* && "$out" != *"DEL:19.0"* && "$out" != *"DEL:18.0"* ]] \
   && ok "Xcode DeviceSupport keeps the newest 2, removes older ones" \
@@ -596,11 +596,11 @@ FIX=$(mktemp -d); STUBD=$(mktemp -d)
 printf '#!/bin/sh\nsleep 300\n' > "$STUBD/du"; chmod +x "$STUBD/du"
 mkdir -p "$FIX/.npm/_npx"; : > "$FIX/.npm/_npx/x"
 _t0=$SECONDS
-HOME="$FIX" DEHOARD_SIZE_TIMEOUT=3 PATH="$STUBD:$SAFE_PATH" zsh "$SCRIPT" --apply --yes >/dev/null 2>&1
+HOME="$FIX" SCREE_SIZE_TIMEOUT=3 PATH="$STUBD:$SAFE_PATH" zsh "$SCRIPT" --apply --yes >/dev/null 2>&1
 _el=$(( SECONDS - _t0 ))
 (( _el < 120 )) \
   && ok "a hung directory-size probe cannot stall the run (${_el}s, bounded)" \
-  || bad "hung du stalled the run for ${_el}s - DEHOARD_SIZE_TIMEOUT not applied"
+  || bad "hung du stalled the run for ${_el}s - SCREE_SIZE_TIMEOUT not applied"
 rm -rf "$FIX" "$STUBD"
 
 # Multi-path _rm must name EACH file in its own "removed:" line. The resolved path was computed in
@@ -674,7 +674,7 @@ FIX=$(mktemp -d); STUBD=$(mktemp -d)
 printf '#!/bin/sh\nsleep 300\n' > "$STUBD/du"; chmod +x "$STUBD/du"
 mkdir -p "$FIX/.cache/x"
 _t0=$SECONDS
-HOME="$FIX" DEHOARD_SWEEP_TIMEOUT=3 DEHOARD_SIZE_TIMEOUT=3 PATH="$STUBD:$SAFE_PATH" \
+HOME="$FIX" SCREE_SWEEP_TIMEOUT=3 SCREE_SIZE_TIMEOUT=3 PATH="$STUBD:$SAFE_PATH" \
   zsh "$SCRIPT" --report >/dev/null 2>&1
 _el=$(( SECONDS - _t0 ))
 (( _el < 90 )) \
@@ -685,8 +685,8 @@ rm -rf "$FIX" "$STUBD"
 # Arithmetic-injection guard. zsh evaluates a variable's VALUE inside $(( )) recursively, and
 # arithmetic supports assignment — so a numeric env var set to `(DRY_RUN=0)` clobbers the flag
 # _rm branches on and silently turns a PREVIEW run into a real deletion. Regression: the victim
-# must survive, and dehoard must say it previewed.
-for _bad_var in DEHOARD_HELD_OPEN_MIN_GB CACHE_MIN_MB DEHOARD_PM_TIMEOUT; do
+# must survive, and scree must say it previewed.
+for _bad_var in SCREE_HELD_OPEN_MIN_GB CACHE_MIN_MB SCREE_PM_TIMEOUT; do
   new_fixture
   out=$(env "$_bad_var=(DRY_RUN=0)" HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" 2>&1)
   if [[ -f "$FIX/.npm/_npx/x" && "$out" == *"Preview complete"* ]]; then
@@ -697,10 +697,10 @@ for _bad_var in DEHOARD_HELD_OPEN_MIN_GB CACHE_MIN_MB DEHOARD_PM_TIMEOUT; do
   rm -rf "$FIX"
 done
 # ...and under --dry-run WITH --apply present, which is the path that actually reaches _pm_run.
-# DEHOARD_PM_TIMEOUT's arithmetic (`maxticks=$(( secs * 5 ))`) lives in plain function scope, not a
+# SCREE_PM_TIMEOUT's arithmetic (`maxticks=$(( secs * 5 ))`) lives in plain function scope, not a
 # subshell, so this is the one variable whose clobber would propagate. The preview loop above never
 # reaches it: _pm_run is only called from the else-branch of `if $DRY_RUN`.
-for _bad_var in DEHOARD_PM_TIMEOUT CACHE_MIN_MB DEHOARD_HELD_OPEN_MIN_GB; do
+for _bad_var in SCREE_PM_TIMEOUT CACHE_MIN_MB SCREE_HELD_OPEN_MIN_GB; do
   new_fixture
   out=$(env "$_bad_var=(DRY_RUN=0)" HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --apply --dry-run 2>&1)
   if [[ -f "$FIX/.npm/_npx/x" && "$out" == *"Preview complete"* ]]; then
@@ -739,12 +739,12 @@ rm -rf "$FIX"
 # integer. Assert on the guard's own stderr warning instead: it must fire for a bad value and
 # stay silent for a good one.
 new_fixture
-out=$(DEHOARD_HELD_OPEN_MIN_GB=20 HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" 2>&1 >/dev/null)
+out=$(SCREE_HELD_OPEN_MIN_GB=20 HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" 2>&1 >/dev/null)
 [[ "$out" != *"ignoring non-numeric"* ]] \
   && ok "numeric env-var override (20) is accepted, no spurious warning" \
   || bad "injection guard rejected a valid numeric override: [$out]"
-out=$(DEHOARD_HELD_OPEN_MIN_GB="5.5" HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" 2>&1 >/dev/null)
-[[ "$out" == *"ignoring non-numeric DEHOARD_HELD_OPEN_MIN_GB='5.5'"* ]] \
+out=$(SCREE_HELD_OPEN_MIN_GB="5.5" HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" 2>&1 >/dev/null)
+[[ "$out" == *"ignoring non-numeric SCREE_HELD_OPEN_MIN_GB='5.5'"* ]] \
   && ok "non-integer env var is rejected by name and value on stderr" \
   || bad "guard did not report a rejected non-integer: [$out]"
 rm -rf "$FIX"
@@ -842,7 +842,7 @@ rm -rf "$FIX"
 # The ignore list is checked BEFORE the trash branch, so an ignored path is
 # skipped rather than quietly relocated.
 new_fixture
-mkdir -p "$FIX/.config/dehoard"; echo "$FIX/.npm/_npx" > "$FIX/.config/dehoard/ignore"
+mkdir -p "$FIX/.config/scree"; echo "$FIX/.npm/_npx" > "$FIX/.config/scree/ignore"
 echo payload > "$FIX/.npm/_npx/x"
 out=$(HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --apply --yes --trash 2>&1)
 [[ -f "$FIX/.npm/_npx/x" && ! -e "$FIX/.Trash/_npx" ]] \
@@ -931,7 +931,7 @@ out=$(HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --apply --yes --trash 2>&1)
 rm -rf "$FIX"
 
 # Held-open deleted inodes: a process sitting on deleted files keeps their blocks, so df
-# under-reports and dehoard's figure looks wrong for reasons dehoard did not cause. Stub lsof
+# under-reports and scree's figure looks wrong for reasons scree did not cause. Stub lsof
 # in -F field mode (what the code parses) to fake one 26 GB holder, then one 0.43 GB holder.
 FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; LOG="$FIX/stub.log"
 make_stubs "$STUBDIR"
@@ -968,7 +968,7 @@ out=$(HOME="$FIX" STUB_LOG="$LOG" PATH="$STUBDIR:$SAFE_PATH" zsh "$SCRIPT" --rep
 [[ "$out" == *"26.0 GB is held by deleted files"* && "$out" == *"bloatd (pid 4242)"* ]] \
   && ok "held-open: 26 GB holder is reported with size and process" \
   || bad "held-open warning missing or malformed"
-# ...and it must never tell the user to kill anything; naming the process is where dehoard stops.
+# ...and it must never tell the user to kill anything; naming the process is where scree stops.
 [[ "$out" != *"kill"* ]] \
   && ok "held-open: warns and names the process, never suggests killing it" \
   || bad "held-open warning suggests killing a process"
@@ -1092,7 +1092,7 @@ jf=$(HOME="$FIX" CLICOLOR_FORCE=1 PATH="$STUBDIR:$SAFE_PATH" zsh "$SCRIPT" --jso
                         || bad "--json leaked ANSI escapes under CLICOLOR_FORCE"
 # (b) the --apply deletion log is raw text with color FORCED on
 HOME="$FIX" CLICOLOR_FORCE=1 PATH="$STUBDIR:$SAFE_PATH" zsh "$SCRIPT" --apply --yes >/dev/null 2>&1
-logf=("$FIX"/.cache/dehoard/run-*.log(N))
+logf=("$FIX"/.cache/scree/run-*.log(N))
 if (( ${#logf} )); then
   grep -q "$esc" "${logf[1]}" && bad "deletion log leaked ANSI escapes (must be raw text)" \
                               || ok "deletion log is escape-free even under CLICOLOR_FORCE=1"
@@ -1126,12 +1126,12 @@ rm -rf "$FIX"
 # 5r, --version prints a clean version line and exits 0 (release hygiene for an rm -rf tool:
 #       a user must be able to report which build they ran). Output is pure (no banner/color).
 ver=$(PATH="$SAFE_PATH" zsh "$SCRIPT" --version 2>/dev/null); vrc=$?   # --version exits before touching $HOME
-[[ "$ver" == "dehoard "[0-9]*.[0-9]*.[0-9]* && $vrc -eq 0 ]] \
-  && ok "--version prints 'dehoard X.Y.Z' and exits 0 (got: $ver)" \
+[[ "$ver" == "scree "[0-9]*.[0-9]*.[0-9]* && $vrc -eq 0 ]] \
+  && ok "--version prints 'scree X.Y.Z' and exits 0 (got: $ver)" \
   || bad "--version wrong (out='$ver' rc=$vrc)"
 
 # 5s, inventory sizing is HARDLINK-AWARE (a wrong reclaim number is a deletion bug in a safe
-#       costume). dehoard sizes via `du`, which counts a shared inode ONCE. This pins that: a
+#       costume). scree sizes via `du`, which counts a shared inode ONCE. This pins that: a
 #       model dir whose blob is hardlinked twice must report ~1x its size, not 2x. Guards against a
 #       future refactor to naive per-file summing (which would double-count and inflate "reclaim").
 if command -v python3 >/dev/null 2>&1; then
@@ -1158,7 +1158,7 @@ fi
 # 5t, --apply echoes each deleted path live (deletions are no longer silent; the user sees what
 #       was removed in real time, not just a section label + a log file they have to go read).
 FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; make_stubs "$STUBDIR"
-mkdir -p "$FIX/.npm/_npx"; : > "$FIX/.npm/_npx/x"          # a Tier-1 cache dehoard deletes
+mkdir -p "$FIX/.npm/_npx"; : > "$FIX/.npm/_npx/x"          # a Tier-1 cache scree deletes
 ao=$(HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" zsh "$SCRIPT" --apply --yes 2>/dev/null)
 [[ "$ao" == *"removed:"*"_npx"* ]] \
   && ok "--apply echoes each removed path live (deletions are visible, not silent)" \
@@ -1166,7 +1166,7 @@ ao=$(HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" zsh "$SCRIPT" --apply --yes 2>/dev/n
 rm -rf "$FIX"
 
 # 5u, MATLAB: --scan clears stale logs but KEEPS the active ServiceHost runtime (deleting it would
-#       just force a re-download, so dehoard leaves it alone) and keeps prefs, history, and user code.
+#       just force a re-download, so scree leaves it alone) and keeps prefs, history, and user code.
 #       Also proves the space-containing MathWorks paths are handled.
 FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; make_stubs "$STUBDIR"
 AS="$FIX/Library/Application Support/MathWorks"
@@ -1210,7 +1210,7 @@ fi
 FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
 print -r -- $'#!/bin/sh\nsleep 30' > "$STUBDIR/brew"; chmod +x "$STUBDIR/brew"   # brew now HANGS
 mkdir -p "$FIX/.npm/_npx"; : > "$FIX/.npm/_npx/x"
-( HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_PM_TIMEOUT=2 \
+( HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" SCREE_PM_TIMEOUT=2 \
     zsh "$SCRIPT" --apply --yes >"$FIX/out" 2>&1 ) &
 run_pid=$!
 ( sleep 90; kill -9 $run_pid 2>/dev/null ) &     # safety net (wide margin: the guarded run finishes in ~2s, so 137 means a truly hung guard, not a slow box)
@@ -1272,8 +1272,8 @@ rm -rf "$FIX"
 # 5z, universal ignore list: a path matching an ignore entry (incl. a glob) must survive even in the
 #       batch Tier-1 sweep (not just interactive prompts), and the skip is announced.
 FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
-mkdir -p "$FIX/.config/dehoard"
-print -r -- "$FIX/Library/Caches/node-*" > "$FIX/.config/dehoard/ignore"   # a GLOB ignore entry
+mkdir -p "$FIX/.config/scree"
+print -r -- "$FIX/Library/Caches/node-*" > "$FIX/.config/scree/ignore"   # a GLOB ignore entry
 mkdir -p "$FIX/Library/Caches/node-gyp"; : > "$FIX/Library/Caches/node-gyp/f"   # ignored → must survive
 mkdir -p "$FIX/.cache/node"; : > "$FIX/.cache/node/x"                            # not ignored → deleted
 io=$(HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" zsh "$SCRIPT" --apply --yes 2>&1)
@@ -1285,7 +1285,7 @@ fi
 rm -rf "$FIX"
 
 # 5A, --pick = ONE unified fzf picker across all in-scope --scan categories. fzf is stubbed;
-#      DEHOARD_FORCE_PICKER=1 lifts the TTY gate. The stub stands in for the user's marking:
+#      SCREE_FORCE_PICKER=1 lifts the TTY gate. The stub stands in for the user's marking:
 #      `cat` = every record selected (≈ Ctrl-A select-all); `exit 0` = nothing marked (Esc/abort);
 #      a perl filter = mark only one category. The picker is delete-time only (needs --apply).
 _mk_mixed() {  # $1 = HOME fixture: a venv + a node_modules + a >100KB log + a .bak (4 categories)
@@ -1298,7 +1298,7 @@ _mk_mixed() {  # $1 = HOME fixture: a venv + a node_modules + a >100KB log + a .
 FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
 print -r -- $'#!/bin/sh\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
 _mk_mixed "$FIX"
-HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" SCREE_FORCE_PICKER=1 \
   zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
 [[ ! -d "$FIX/p1/.venv" && ! -d "$FIX/proj/node_modules" && ! -f "$FIX/proj/big.log" && ! -f "$FIX/proj/notes.bak" ]] \
   && ok "--pick select-all deletes across every category (venv+node_modules+log+bak)" \
@@ -1308,7 +1308,7 @@ rm -rf "$FIX"
 FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
 print -r -- $'#!/bin/sh\nexit 0' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
 _mk_mixed "$FIX"
-HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" SCREE_FORCE_PICKER=1 \
   zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
 [[ -d "$FIX/p1/.venv" && -d "$FIX/proj/node_modules" && -f "$FIX/proj/big.log" && -f "$FIX/proj/notes.bak" ]] \
   && ok "--pick abort/empty selection deletes NOTHING (safety contract holds)" \
@@ -1318,7 +1318,7 @@ rm -rf "$FIX"
 FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
 print -r -- $'#!/bin/sh\nexec perl -0 -ne \'print if /node_modules/\'' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
 _mk_mixed "$FIX"
-HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" SCREE_FORCE_PICKER=1 \
   zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
 [[ ! -d "$FIX/proj/node_modules" && -d "$FIX/p1/.venv" && -f "$FIX/proj/big.log" && -f "$FIX/proj/notes.bak" ]] \
   && ok "--pick partial selection deletes only marked category, keeps the rest" \
@@ -1338,7 +1338,7 @@ rm -rf "$FIX"
 FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
 print -r -- $'#!/bin/sh\necho "fzf $*" >> "$STUB_LOG"\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
 _mk_mixed "$FIX"
-pno=$(HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+pno=$(HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" SCREE_FORCE_PICKER=1 \
   zsh "$SCRIPT" --scan --pick 2>&1)
 [[ -d "$FIX/proj/node_modules" ]] && ! grep -q "^fzf" "$STUB_LOG" 2>/dev/null && grep -q "takes effect with --apply" <<< "$pno" \
   && ok "--pick without --apply: no fzf invoked, prints the note, deletes nothing (preview)" \
@@ -1348,7 +1348,7 @@ rm -rf "$FIX"
 FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
 print -r -- $'#!/bin/sh\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
 mkdir -p "$FIX/miniconda3/envs/foo/lib"; : > "$FIX/miniconda3/envs/foo/lib/x"
-HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" SCREE_FORCE_PICKER=1 \
   zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
 grep -q "conda env remove -n foo" "$STUB_LOG" && [[ -d "$FIX/miniconda3/envs/foo" ]] \
   && ok "--pick typed deletion: conda env uses 'conda env remove' (not raw rm)" \
@@ -1358,7 +1358,7 @@ rm -rf "$FIX"
 FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
 print -r -- $'#!/bin/sh\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
 mkdir -p "$FIX/my proj/node_modules/x"; : > "$FIX/my proj/node_modules/x/f"
-HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" SCREE_FORCE_PICKER=1 \
   zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
 [[ ! -d "$FIX/my proj/node_modules" ]] \
   && ok "--pick handles a path with a space (NUL round-trip)" \
@@ -1370,7 +1370,7 @@ rm -rf "$FIX"
 FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
 print -r -- $'#!/bin/sh\nexit 0' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
 _mk_mixed "$FIX"
-HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" SCREE_FORCE_PICKER=1 \
   zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
 ! grep -qiE 'brew|npm|yarn|bun|tmutil|docker' "$STUB_LOG" 2>/dev/null \
   && ok "--pick is interactive-only: Tier 1 auto-sweep is skipped (no batch tool invoked)" \
@@ -1384,7 +1384,7 @@ print -r -- $'#!/bin/sh\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
 _tab=$'\t'
 mkdir -p "$FIX/normal/node_modules/y"; : > "$FIX/normal/node_modules/y/f"
 mkdir -p "$FIX/tab${_tab}dir/node_modules/x"; : > "$FIX/tab${_tab}dir/node_modules/x/f"
-HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" SCREE_FORCE_PICKER=1 \
   zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
 [[ ! -d "$FIX/normal/node_modules" && -d "$FIX/tab${_tab}dir/node_modules" ]] \
   && ok "--pick skips a TAB-in-path item safely (normal deleted, tab-path kept, no mis-map)" \
@@ -1395,7 +1395,7 @@ rm -rf "$FIX"
 FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
 print -r -- $'#!/bin/sh\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
 mkdir -p "$FIX/.local/share/uv/python/cpython-3.12.1-macos/bin"; : > "$FIX/.local/share/uv/python/cpython-3.12.1-macos/bin/python"
-HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" SCREE_FORCE_PICKER=1 \
   zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
 grep -qF -- "uv python uninstall cpython-3.12.1-macos" "$STUB_LOG" && [[ -d "$FIX/.local/share/uv/python/cpython-3.12.1-macos" ]] \
   && ok "--pick typed deletion: uv python uses 'uv python uninstall' (native, not rm)" \
@@ -1406,7 +1406,7 @@ rm -rf "$FIX"
 FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
 print -r -- $'#!/bin/sh\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
 mkdir -p "$FIX/Library/Android/sdk/system-images/android-34/google_apis/arm64-v8a"; : > "$FIX/Library/Android/sdk/system-images/android-34/google_apis/arm64-v8a/x"
-HOME="$FIX" ANDROID_SDK_ROOT="$FIX/Library/Android/sdk" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+HOME="$FIX" ANDROID_SDK_ROOT="$FIX/Library/Android/sdk" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" SCREE_FORCE_PICKER=1 \
   zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
 grep -qF -- "sdkmanager --uninstall system-images;android-34;google_apis;arm64-v8a" "$STUB_LOG" \
   && ok "--pick typed deletion: android builds the correct 'sdkmanager --uninstall' pkg string" \
@@ -1417,7 +1417,7 @@ rm -rf "$FIX"
 FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
 print -r -- $'#!/bin/sh\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
 mkdir -p "$FIX/proj/target/debug"; : > "$FIX/proj/Cargo.toml"; : > "$FIX/proj/target/debug/x"
-HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" SCREE_FORCE_PICKER=1 \
   zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
 grep -qF -- "cargo clean --manifest-path $FIX/proj/Cargo.toml" "$STUB_LOG" && [[ -d "$FIX/proj/target" ]] \
   && ok "--pick typed deletion: cargo uses 'cargo clean --manifest-path' (native, not rm)" \
@@ -1429,8 +1429,8 @@ rm -rf "$FIX"
 FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
 print -r -- $'#!/bin/sh\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
 mkdir -p "$FIX/miniconda3/envs/keepme/lib"; : > "$FIX/miniconda3/envs/keepme/lib/x"
-mkdir -p "$FIX/.config/dehoard"; print -r -- "$FIX/miniconda3/envs/keepme" > "$FIX/.config/dehoard/ignore"
-HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+mkdir -p "$FIX/.config/scree"; print -r -- "$FIX/miniconda3/envs/keepme" > "$FIX/.config/scree/ignore"
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" SCREE_FORCE_PICKER=1 \
   zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
 { ! grep -qF -- "conda env remove -n keepme" "$STUB_LOG" 2>/dev/null } && [[ -d "$FIX/miniconda3/envs/keepme" ]] \
   && ok "--pick honors the ignore list: an ignored env is dropped pre-picker (native bypass closed)" \
@@ -1443,8 +1443,8 @@ FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$
 print -r -- $'#!/bin/sh\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
 mkdir -p "$FIX/keepme/proj/node_modules/x"; : > "$FIX/keepme/proj/node_modules/x/f"   # INSIDE ignored dir
 mkdir -p "$FIX/other/node_modules/x";       : > "$FIX/other/node_modules/x/f"          # not ignored
-mkdir -p "$FIX/.config/dehoard"; print -r -- "$FIX/keepme" > "$FIX/.config/dehoard/ignore"
-HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+mkdir -p "$FIX/.config/scree"; print -r -- "$FIX/keepme" > "$FIX/.config/scree/ignore"
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" SCREE_FORCE_PICKER=1 \
   zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
 [[ -d "$FIX/keepme/proj/node_modules" && ! -d "$FIX/other/node_modules" ]] \
   && ok "--pick: ignore covers a descendant of an ignored dir (child kept, non-ignored sibling deleted)" \
@@ -1457,7 +1457,7 @@ FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$
 print -r -- $'#!/bin/sh\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
 mkdir -p "$FIX/.cache/codex-runtimes"
 dd if=/dev/zero of="$FIX/.cache/codex-runtimes/blob" bs=1024 count=120000 2>/dev/null   # >100MB so the generic sweep also catches it
-dd=$(HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+dd=$(HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" SCREE_FORCE_PICKER=1 \
   zsh "$SCRIPT" --scan --pick --apply --yes 2>&1)
 { [[ ! -d "$FIX/.cache/codex-runtimes" ]] && ! grep -q "▸ cache " <<< "$dd" } \
   && ok "--pick dedups across categories: a twice-found path is registered once (no duplicate 'cache' category)" \
@@ -1466,11 +1466,11 @@ rm -rf "$FIX"
 
 # 5C, --report "Last --apply run" must show the NEWEST log, not the oldest (regression: the glob was
 #      (N.Om) = oldest-first, so [1] was the oldest; fixed to (N.om) = newest-first).
-FIX=$(mktemp -d); mkdir -p "$FIX/.cache/dehoard"
-print -r -- $'4\t/x' > "$FIX/.cache/dehoard/run-20260101-000000.log"
-print -r -- $'9\t/y' > "$FIX/.cache/dehoard/run-20260601-000000.log"
-touch -t 202601010000 "$FIX/.cache/dehoard/run-20260101-000000.log"
-touch -t 202606010000 "$FIX/.cache/dehoard/run-20260601-000000.log"   # newer mtime → should be reported
+FIX=$(mktemp -d); mkdir -p "$FIX/.cache/scree"
+print -r -- $'4\t/x' > "$FIX/.cache/scree/run-20260101-000000.log"
+print -r -- $'9\t/y' > "$FIX/.cache/scree/run-20260601-000000.log"
+touch -t 202601010000 "$FIX/.cache/scree/run-20260101-000000.log"
+touch -t 202606010000 "$FIX/.cache/scree/run-20260601-000000.log"   # newer mtime → should be reported
 rep=$(HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --report 2>/dev/null)
 echo "$rep" | grep -q "Last --apply run: 20260601-000000" \
   && ok "--report 'Last --apply run' shows the newest log (om glob), not the oldest" \
@@ -1492,7 +1492,7 @@ print -r -- $'#!/bin/sh\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
 mkdir -p "$FIX/proj/node_modules/x"; : > "$FIX/proj/node_modules/x/f"          # registered → picker → deleted
 : > "$FIX/.DS_Store"                                                            # excluded → must SURVIVE
 mkdir -p "$FIX/.ipython/profile_default"; : > "$FIX/.ipython/profile_default/history.sqlite"  # excluded → SURVIVE
-eout=$(HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+eout=$(HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" SCREE_FORCE_PICKER=1 \
   zsh "$SCRIPT" --scan --pick --apply --yes 2>&1)
 [[ ! -d "$FIX/proj/node_modules" && -f "$FIX/.DS_Store" && -f "$FIX/.ipython/profile_default/history.sqlite" ]] \
   && { ! grep -q '_sub=' <<< "$eout" } \
@@ -1506,7 +1506,7 @@ FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$
 print -r -- $'#!/bin/sh\nexit 0' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
 mkdir -p "$FIX/a/node_modules/x" "$FIX/b/node_modules/y"; : > "$FIX/a/node_modules/x/f"; : > "$FIX/b/node_modules/y/f"
 mkdir -p "$FIX/p1/.venv/bin"; echo "home=/x" > "$FIX/p1/.venv/pyvenv.cfg"
-so=$(HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+so=$(HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" SCREE_FORCE_PICKER=1 \
   zsh "$SCRIPT" --scan --pick --apply --yes 2>&1)
 { echo "$so" | grep -q "Reclaimable by category" } && { echo "$so" | grep -qE 'node_modules +2' } \
   && { echo "$so" | grep -qE 'venv +1' } && [[ -d "$FIX/a/node_modules" && -d "$FIX/p1/.venv" ]] \
@@ -1520,7 +1520,7 @@ FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$
 print -r -- $'#!/bin/sh\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
 mkdir -p "$FIX/a/node_modules/x"; : > "$FIX/a/node_modules/x/f"
 mkdir -p "$FIX/p1/.venv/bin"; echo "home=/x" > "$FIX/p1/.venv/pyvenv.cfg"
-go=$(HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+go=$(HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" SCREE_FORCE_PICKER=1 \
   zsh "$SCRIPT" --scan --pick --apply --yes 2>&1)
 { echo "$go" | grep -q '▸ node_modules' } && { echo "$go" | grep -q '▸ venv' } \
   && [[ ! -d "$FIX/a/node_modules" && ! -d "$FIX/p1/.venv" ]] \
@@ -1528,13 +1528,13 @@ go=$(HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_P
   || bad "--pick did not open per-category pickers / did not delete per category"
 rm -rf "$FIX"
 
-# 5H, freed-space honesty: "Storage freed" must come from dehoard's own deletion tally, not a df delta.
+# 5H, freed-space honesty: "Storage freed" must come from scree's own deletion tally, not a df delta.
 #      (a) Esc-all (fzf=exit 0) deletes nothing → "Nothing deleted.", never a positive freed figure
 #          (the old df-diff bug reported ambient disk churn even when nothing was removed).
 FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
 print -r -- $'#!/bin/sh\nexit 0' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
 mkdir -p "$FIX/a/node_modules/x"; : > "$FIX/a/node_modules/x/f"
-fh=$(HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+fh=$(HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" SCREE_FORCE_PICKER=1 \
   zsh "$SCRIPT" --scan --pick --apply --yes 2>&1)
 { echo "$fh" | grep -q 'Nothing deleted' } && { echo "$fh" | grep -qvE 'Storage freed: [1-9]' } \
   && [[ -d "$FIX/a/node_modules" ]] \
@@ -1545,7 +1545,7 @@ rm -rf "$FIX"
 FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
 print -r -- $'#!/bin/sh\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
 mkdir -p "$FIX/a/node_modules/x"; dd if=/dev/zero of="$FIX/a/node_modules/x/blob" bs=1024 count=2048 2>/dev/null
-fr=$(HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+fr=$(HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" SCREE_FORCE_PICKER=1 \
   zsh "$SCRIPT" --scan --pick --apply --yes 2>&1)
 { echo "$fr" | grep -qE 'Storage freed: [1-9]' } && [[ ! -d "$FIX/a/node_modules" ]] \
   && ok "--pick freed-space: a real delete reports a freed figure from the actual size removed" \
@@ -1565,26 +1565,26 @@ fn=$(HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" \
   || bad "freed-space: a conda env removed via native uninstaller in non-pick --scan was not counted"
 rm -rf "$FIX"
 
-# 5J, DEHOARD_APPLY_DEFAULT is COMPARED, never executed. A non-"true" value must neither run as a
+# 5J, SCREE_APPLY_DEFAULT is COMPARED, never executed. A non-"true" value must neither run as a
 #      command nor flip APPLY on. (zsh does not word-split, but a bare command name would still run
 #      under the old `${VAR} && APPLY=true`.) A stub named `pwn` touches a sentinel if executed.
 FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
 print -r -- $'#!/bin/sh\ntouch "$PWN_SENTINEL"' > "$STUBDIR/pwn"; chmod +x "$STUBDIR/pwn"
 sent="$FIX/PWNED"
-HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" PWN_SENTINEL="$sent" DEHOARD_APPLY_DEFAULT=pwn \
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" PWN_SENTINEL="$sent" SCREE_APPLY_DEFAULT=pwn \
   zsh "$SCRIPT" >/dev/null 2>&1
 [[ ! -e "$sent" ]] \
-  && ok "DEHOARD_APPLY_DEFAULT is compared, not executed (a command-name value never runs)" \
-  || bad "DEHOARD_APPLY_DEFAULT was executed as a command (string-compare regression)"
+  && ok "SCREE_APPLY_DEFAULT is compared, not executed (a command-name value never runs)" \
+  || bad "SCREE_APPLY_DEFAULT was executed as a command (string-compare regression)"
 rm -rf "$FIX"
 # (b) the legit opt-in still works: =true (no --apply) must enable apply and delete a Tier-1 cache
 FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
 mkdir -p "$FIX/.npm/_npx"; : > "$FIX/.npm/_npx/x"
-HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_APPLY_DEFAULT=true \
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" SCREE_APPLY_DEFAULT=true \
   zsh "$SCRIPT" --yes >/dev/null 2>&1
 [[ ! -e "$FIX/.npm/_npx/x" ]] \
-  && ok "DEHOARD_APPLY_DEFAULT=true still enables apply (opt-in preserved, not over-corrected)" \
-  || bad "DEHOARD_APPLY_DEFAULT=true no longer enables apply"
+  && ok "SCREE_APPLY_DEFAULT=true still enables apply (opt-in preserved, not over-corrected)" \
+  || bad "SCREE_APPLY_DEFAULT=true no longer enables apply"
 rm -rf "$FIX"
 
 # 5K, LM Studio .gguf deletion now ROUTES THROUGH _rm (was a `find -delete` bypass): it must be
@@ -1592,7 +1592,7 @@ rm -rf "$FIX"
 FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
 mkdir -p "$FIX/.lmstudio/models/pub"; dd if=/dev/zero of="$FIX/.lmstudio/models/pub/m.gguf" bs=1024 count=64 2>/dev/null
 HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" zsh "$SCRIPT" --models --apply --yes >/dev/null 2>&1
-logf=("$FIX"/.cache/dehoard/run-*.log(N))
+logf=("$FIX"/.cache/scree/run-*.log(N))
 if [[ ! -e "$FIX/.lmstudio/models/pub/m.gguf" ]] && (( ${#logf} )) && grep -q "m.gguf" "${logf[1]}"; then
   ok "LM Studio .gguf deleted via _rm and recorded in the run log (no longer a bypass)"
 else
@@ -1601,9 +1601,9 @@ fi
 rm -rf "$FIX"
 # (b) an ignore-listed .gguf survives, proving the route is now ignore-aware
 FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$STUBDIR"
-mkdir -p "$FIX/.lmstudio/models/keep" "$FIX/.lmstudio/models/go" "$FIX/.config/dehoard"
+mkdir -p "$FIX/.lmstudio/models/keep" "$FIX/.lmstudio/models/go" "$FIX/.config/scree"
 : > "$FIX/.lmstudio/models/keep/keep.gguf"; : > "$FIX/.lmstudio/models/go/go.gguf"
-print -r -- "$FIX/.lmstudio/models/keep/*" > "$FIX/.config/dehoard/ignore"
+print -r -- "$FIX/.lmstudio/models/keep/*" > "$FIX/.config/scree/ignore"
 HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" zsh "$SCRIPT" --models --apply --yes >/dev/null 2>&1
 [[ -e "$FIX/.lmstudio/models/keep/keep.gguf" && ! -e "$FIX/.lmstudio/models/go/go.gguf" ]] \
   && ok "LM Studio .gguf on the ignore list survives (route is ignore-aware now)" \
@@ -1611,10 +1611,10 @@ HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" zsh "$SCRIPT" --mode
 rm -rf "$FIX"
 
 # 5L, ignore list migrates from the old ~/.cache location to ~/.config (it is config, not cache).
-FIX=$(mktemp -d); mkdir -p "$FIX/.cache/dehoard"; print -r -- "$FIX/keepsafe" > "$FIX/.cache/dehoard/ignore"
+FIX=$(mktemp -d); mkdir -p "$FIX/.cache/scree"; print -r -- "$FIX/keepsafe" > "$FIX/.cache/scree/ignore"
 HOME="$FIX" zsh "$SCRIPT" --list-ignored >/dev/null 2>&1
-[[ -f "$FIX/.config/dehoard/ignore" && ! -f "$FIX/.cache/dehoard/ignore" ]] \
-  && grep -qxF "$FIX/keepsafe" "$FIX/.config/dehoard/ignore" \
+[[ -f "$FIX/.config/scree/ignore" && ! -f "$FIX/.cache/scree/ignore" ]] \
+  && grep -qxF "$FIX/keepsafe" "$FIX/.config/scree/ignore" \
   && ok "ignore list migrates from ~/.cache to ~/.config on next run (config, not cache)" \
   || bad "ignore-list migration to ~/.config failed"
 rm -rf "$FIX"
@@ -1623,61 +1623,61 @@ rm -rf "$FIX"
 # list; --purge also removes it; a non-standard / symlinked script copy is never deleted.
 # (a) non-standard copy KEPT (hint) + logs removed + ignore list KEPT and announced
 FIX=$(mktemp -d)
-mkdir -p "$FIX/.cache/dehoard" "$FIX/.config/dehoard"; : > "$FIX/.cache/dehoard/run-x.log"
-print -r -- "$FIX/keepsafe" > "$FIX/.config/dehoard/ignore"
+mkdir -p "$FIX/.cache/scree" "$FIX/.config/scree"; : > "$FIX/.cache/scree/run-x.log"
+print -r -- "$FIX/keepsafe" > "$FIX/.config/scree/ignore"
 uo=$(HOME="$FIX" zsh "$SCRIPT" --uninstall --yes 2>&1)
-{ [[ ! -d "$FIX/.cache/dehoard" && -f "$FIX/.config/dehoard/ignore" && -f "$SCRIPT" ]] \
+{ [[ ! -d "$FIX/.cache/scree" && -f "$FIX/.config/scree/ignore" && -f "$SCRIPT" ]] \
   && grep -q "kept your ignore list" <<< "$uo" && grep -q "remove it yourself\|remove it manually" <<< "$uo" } \
   && ok "--uninstall: logs removed, ignore list KEPT + announced, non-standard script copy kept" \
   || bad "--uninstall: wrong removal set (should keep ignore list + non-standard script copy)"
 rm -rf "$FIX"
 # (b) --purge ALSO removes the ignore list, echoing its contents first
 FIX=$(mktemp -d)
-mkdir -p "$FIX/.cache/dehoard" "$FIX/.config/dehoard"; : > "$FIX/.cache/dehoard/run-x.log"
-print -r -- "$FIX/keepsafe" > "$FIX/.config/dehoard/ignore"
+mkdir -p "$FIX/.cache/scree" "$FIX/.config/scree"; : > "$FIX/.cache/scree/run-x.log"
+print -r -- "$FIX/keepsafe" > "$FIX/.config/scree/ignore"
 po=$(HOME="$FIX" zsh "$SCRIPT" --purge --yes 2>&1)
-{ [[ ! -d "$FIX/.cache/dehoard" && ! -d "$FIX/.config/dehoard" ]] && grep -q "keepsafe" <<< "$po" } \
+{ [[ ! -d "$FIX/.cache/scree" && ! -d "$FIX/.config/scree" ]] && grep -q "keepsafe" <<< "$po" } \
   && ok "--purge: removes the ignore list too, after echoing its contents" \
   || bad "--purge: did not remove the ignore list or did not echo it first"
 rm -rf "$FIX"
 # (c) standard ~/.local/bin install: removes the script + logs, keeps ignore list
 FIX=$(mktemp -d)
-mkdir -p "$FIX/.local/bin" "$FIX/.cache/dehoard" "$FIX/.config/dehoard"; : > "$FIX/.cache/dehoard/run-x.log"
-print -r -- "$FIX/keepsafe" > "$FIX/.config/dehoard/ignore"
-cp "$SCRIPT" "$FIX/.local/bin/dehoard"; chmod +x "$FIX/.local/bin/dehoard"
-HOME="$FIX" zsh "$FIX/.local/bin/dehoard" --uninstall --yes >/dev/null 2>&1
-[[ ! -e "$FIX/.local/bin/dehoard" && ! -d "$FIX/.cache/dehoard" && -f "$FIX/.config/dehoard/ignore" ]] \
+mkdir -p "$FIX/.local/bin" "$FIX/.cache/scree" "$FIX/.config/scree"; : > "$FIX/.cache/scree/run-x.log"
+print -r -- "$FIX/keepsafe" > "$FIX/.config/scree/ignore"
+cp "$SCRIPT" "$FIX/.local/bin/scree"; chmod +x "$FIX/.local/bin/scree"
+HOME="$FIX" zsh "$FIX/.local/bin/scree" --uninstall --yes >/dev/null 2>&1
+[[ ! -e "$FIX/.local/bin/scree" && ! -d "$FIX/.cache/scree" && -f "$FIX/.config/scree/ignore" ]] \
   && ok "--uninstall: standard install removes script + logs, keeps the ignore list" \
   || bad "--uninstall: standard install removal set wrong"
 rm -rf "$FIX"
 # (d) symlinked install is NOT deleted (rustup lesson): refuse + print manual hint
 FIX=$(mktemp -d)
-mkdir -p "$FIX/.local/bin" "$FIX/realdir" "$FIX/.cache/dehoard"; : > "$FIX/.cache/dehoard/run-x.log"
-cp "$SCRIPT" "$FIX/realdir/dehoard"; chmod +x "$FIX/realdir/dehoard"
-ln -s "$FIX/realdir/dehoard" "$FIX/.local/bin/dehoard"
-so=$(HOME="$FIX" zsh "$FIX/.local/bin/dehoard" --uninstall --yes 2>&1)
-{ [[ -e "$FIX/.local/bin/dehoard" && -f "$FIX/realdir/dehoard" ]] && grep -q "remove it yourself\|remove it manually" <<< "$so" } \
+mkdir -p "$FIX/.local/bin" "$FIX/realdir" "$FIX/.cache/scree"; : > "$FIX/.cache/scree/run-x.log"
+cp "$SCRIPT" "$FIX/realdir/scree"; chmod +x "$FIX/realdir/scree"
+ln -s "$FIX/realdir/scree" "$FIX/.local/bin/scree"
+so=$(HOME="$FIX" zsh "$FIX/.local/bin/scree" --uninstall --yes 2>&1)
+{ [[ -e "$FIX/.local/bin/scree" && -f "$FIX/realdir/scree" ]] && grep -q "remove it yourself\|remove it manually" <<< "$so" } \
   && ok "--uninstall: a symlinked install is refused (kept) with a manual hint (rustup lesson)" \
   || bad "--uninstall: deleted a symlinked install (must refuse and only hint)"
 rm -rf "$FIX"
 # (e) abort (no --yes, no tty) removes NOTHING
-FIX=$(mktemp -d); mkdir -p "$FIX/.cache/dehoard"; : > "$FIX/.cache/dehoard/run-x.log"
+FIX=$(mktemp -d); mkdir -p "$FIX/.cache/scree"; : > "$FIX/.cache/scree/run-x.log"
 HOME="$FIX" zsh "$SCRIPT" --uninstall >/dev/null 2>&1 < /dev/null
-[[ -d "$FIX/.cache/dehoard" ]] \
+[[ -d "$FIX/.cache/scree" ]] \
   && ok "--uninstall: declined/non-interactive confirm removes nothing" \
   || bad "--uninstall: removed data without a yes (must default to keep)"
 rm -rf "$FIX"
 # (f) --uninstall --dry-run previews and deletes nothing
-FIX=$(mktemp -d); mkdir -p "$FIX/.cache/dehoard"; : > "$FIX/.cache/dehoard/run-x.log"
+FIX=$(mktemp -d); mkdir -p "$FIX/.cache/scree"; : > "$FIX/.cache/scree/run-x.log"
 do=$(HOME="$FIX" zsh "$SCRIPT" --uninstall --dry-run 2>&1)
-{ [[ -d "$FIX/.cache/dehoard" ]] && grep -q "preview" <<< "$do" } \
+{ [[ -d "$FIX/.cache/scree" ]] && grep -q "preview" <<< "$do" } \
   && ok "--uninstall --dry-run previews what it would remove and deletes nothing" \
   || bad "--uninstall --dry-run deleted something or printed no preview"
 rm -rf "$FIX"
 
 # 5N, XDG edge: if XDG_CACHE_HOME == XDG_CONFIG_HOME the logs and the ignore list share one dir.
 # --uninstall must still KEEP the ignore file (remove only the logs); --purge removes it.
-FIX=$(mktemp -d); SH="$FIX/shared/dehoard"; mkdir -p "$SH"
+FIX=$(mktemp -d); SH="$FIX/shared/scree"; mkdir -p "$SH"
 : > "$SH/run-x.log"; print -r -- "$FIX/keepsafe" > "$SH/ignore"
 uoc=$(HOME="$FIX" XDG_CACHE_HOME="$FIX/shared" XDG_CONFIG_HOME="$FIX/shared" zsh "$SCRIPT" --uninstall --yes 2>&1)
 [[ -f "$SH/ignore" && ! -e "$SH/run-x.log" ]] \
@@ -1697,31 +1697,31 @@ rm -rf "$FIX"
 # (a) "Nothing to remove": no cache dir, no ignore, non-standard script copy -> prints it, removes nothing
 FIX=$(mktemp -d)
 no=$(HOME="$FIX" zsh "$SCRIPT" --uninstall --yes 2>&1)
-{ grep -q "Nothing to remove" <<< "$no" && [[ ! -d "$FIX/.cache/dehoard" && ! -d "$FIX/.config/dehoard" ]] } \
+{ grep -q "Nothing to remove" <<< "$no" && [[ ! -d "$FIX/.cache/scree" && ! -d "$FIX/.config/scree" ]] } \
   && ok "--uninstall: 'Nothing to remove' when there is no footprint (fresh user), creates/deletes nothing" \
   || bad "--uninstall: empty-footprint case did not report 'Nothing to remove' cleanly"
 rm -rf "$FIX"
 # (b) curl|zsh: $0 is not a real file -> only the cache dir goes, NO spurious "remove it yourself" warning
-FIX=$(mktemp -d); mkdir -p "$FIX/.cache/dehoard"; : > "$FIX/.cache/dehoard/run-x.log"
-co=$(HOME="$FIX" zsh -c "$(cat "$SCRIPT")" dehoard --uninstall --yes 2>&1)
-{ [[ ! -d "$FIX/.cache/dehoard" ]] && ! grep -qi "remove it yourself\|remove it manually" <<< "$co" } \
+FIX=$(mktemp -d); mkdir -p "$FIX/.cache/scree"; : > "$FIX/.cache/scree/run-x.log"
+co=$(HOME="$FIX" zsh -c "$(cat "$SCRIPT")" scree --uninstall --yes 2>&1)
+{ [[ ! -d "$FIX/.cache/scree" ]] && ! grep -qi "remove it yourself\|remove it manually" <<< "$co" } \
   && ok "--uninstall via curl|zsh (\$0 not a file): removes logs, no spurious script-removal hint" \
   || bad "--uninstall via curl|zsh: kept the logs or printed a spurious script hint"
 rm -rf "$FIX"
 # (c) no ignore file present: no "kept your ignore list" line on --uninstall, no "contents" echo on --purge
-FIX=$(mktemp -d); mkdir -p "$FIX/.cache/dehoard"; : > "$FIX/.cache/dehoard/run-x.log"
+FIX=$(mktemp -d); mkdir -p "$FIX/.cache/scree"; : > "$FIX/.cache/scree/run-x.log"
 io=$(HOME="$FIX" zsh "$SCRIPT" --uninstall --yes 2>&1)
 ! grep -qi "kept your ignore list" <<< "$io" \
   && ok "--uninstall with no ignore file: no spurious 'kept your ignore list' line" \
   || bad "--uninstall claimed to keep an ignore list that does not exist"
-FIX2=$(mktemp -d); mkdir -p "$FIX2/.cache/dehoard"; : > "$FIX2/.cache/dehoard/run-x.log"
+FIX2=$(mktemp -d); mkdir -p "$FIX2/.cache/scree"; : > "$FIX2/.cache/scree/run-x.log"
 po=$(HOME="$FIX2" zsh "$SCRIPT" --purge --yes 2>&1)
-{ grep -q "dehoard uninstalled" <<< "$po" && ! grep -qi "ignore list contents" <<< "$po" } \
+{ grep -q "scree uninstalled" <<< "$po" && ! grep -qi "ignore list contents" <<< "$po" } \
   && ok "--purge with no ignore file: succeeds, no 'ignore list contents' echo" \
   || bad "--purge with no ignore file: errored or echoed nonexistent contents"
 rm -rf "$FIX" "$FIX2"
 # (d) --report log glob honors XDG_CACHE_HOME (not a literal ~/.cache): the 'Last --apply run' line finds it
-FIX=$(mktemp -d); XC="$FIX/xc/dehoard"; mkdir -p "$XC"
+FIX=$(mktemp -d); XC="$FIX/xc/scree"; mkdir -p "$XC"
 print -r -- $'4\t/x' > "$XC/run-20260101-000000.log"; touch -t 202601010000 "$XC/run-20260101-000000.log"
 ro=$(HOME="$FIX" XDG_CACHE_HOME="$FIX/xc" zsh "$SCRIPT" --report 2>/dev/null)
 grep -q "Last --apply run" <<< "$ro" \
@@ -1745,7 +1745,7 @@ FIX=$(mktemp -d); STUBDIR="$FIX/.stubs"; STUB_LOG="$FIX/stub.log"; make_stubs "$
 print -r -- $'#!/bin/sh\ncat' > "$STUBDIR/fzf"; chmod +x "$STUBDIR/fzf"
 mkdir -p "$FIX/miniconda3/envs/--evil/lib"; : > "$FIX/miniconda3/envs/--evil/lib/x"
 mkdir -p "$FIX/miniconda3/envs/good/lib";   : > "$FIX/miniconda3/envs/good/lib/x"
-HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" DEHOARD_FORCE_PICKER=1 \
+HOME="$FIX" PATH="$STUBDIR:$SAFE_PATH" STUB_LOG="$STUB_LOG" SCREE_FORCE_PICKER=1 \
   zsh "$SCRIPT" --scan --pick --apply --yes >/dev/null 2>&1
 { ! grep -qF -- "conda env remove -n --evil" "$STUB_LOG" 2>/dev/null && [[ ! -d "$FIX/miniconda3/envs/--evil" ]] \
   && grep -qF -- "conda env remove -n good" "$STUB_LOG" 2>/dev/null } \
@@ -1779,7 +1779,7 @@ out=$(HOME="$FIX" PATH="$SAFE_PATH" zsh -c '
 rm -rf "$FIX"
 
 # 5Q, shell-env hardening (v0.2.6): a hostile ~/.zshenv (KSH_ARRAYS / SH_WORD_SPLIT) must NOT corrupt
-# output or silently skip paths, because dehoard runs `emulate zsh`. ZDOTDIR points zsh at a fixture
+# output or silently skip paths, because scree runs `emulate zsh`. ZDOTDIR points zsh at a fixture
 # .zshenv so we never touch the real one.
 # (a) KSH_ARRAYS in .zshenv: --json must stay valid JSON (array indexing in the emit can't break).
 if command -v python3 >/dev/null 2>&1; then
@@ -1828,21 +1828,21 @@ echo ""
 # partial download NESTED inside a deleted directory was invisible.
 # --scan removes PROJECT artifacts, which is higher-stakes than Tier 1: a wrong deletion costs a
 # working tree, not a cache. It had no stress test until now.
-if zsh "${0:A:h}/stress-scan.zsh" "$SCRIPT" > /tmp/dehoard-scan.$$ 2>&1; then
+if zsh "${0:A:h}/stress-scan.zsh" "$SCRIPT" > /tmp/scree-scan.$$ 2>&1; then
   ok "--scan stress test: artifacts removed, source and non-build 'target' dirs preserved"
 else
-  bad "--scan stress test failed: $(grep -c '✗' /tmp/dehoard-scan.$$) assertion(s)"
-  grep '✗' /tmp/dehoard-scan.$$ | head -3
+  bad "--scan stress test failed: $(grep -c '✗' /tmp/scree-scan.$$) assertion(s)"
+  grep '✗' /tmp/scree-scan.$$ | head -3
 fi
-rm -f /tmp/dehoard-scan.$$
+rm -f /tmp/scree-scan.$$
 
-if zsh "${0:A:h}/stress-apply.zsh" "$SCRIPT" > /tmp/dehoard-stress.$$ 2>&1; then
+if zsh "${0:A:h}/stress-apply.zsh" "$SCRIPT" > /tmp/scree-stress.$$ 2>&1; then
   ok "--apply stress test: real deletion, every category, guards in harm's way"
 else
-  bad "--apply stress test failed: $(grep -c '✗' /tmp/dehoard-stress.$$) assertion(s)"
-  grep '✗' /tmp/dehoard-stress.$$ | head -3
+  bad "--apply stress test failed: $(grep -c '✗' /tmp/scree-stress.$$) assertion(s)"
+  grep '✗' /tmp/scree-stress.$$ | head -3
 fi
-rm -f /tmp/dehoard-stress.$$
+rm -f /tmp/scree-stress.$$
 
-print -P "%F{cyan}dehoard tests: ${PASS} passed, ${FAIL} failed%f"
+print -P "%F{cyan}scree tests: ${PASS} passed, ${FAIL} failed%f"
 (( FAIL == 0 ))

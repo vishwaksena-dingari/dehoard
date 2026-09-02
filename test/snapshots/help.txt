@@ -1,21 +1,21 @@
 
 ╔══════════════════════════════════════════════════════════════╗
-║                    dehoard  reclaimer                       ║
+║                    scree  reclaimer                       ║
 ╚══════════════════════════════════════════════════════════════╝
 
 USAGE   (preview-by-default: NOTHING is deleted without --apply)
-  dehoard                          → PREVIEW Tier 1 (always-safe) cleanup
-  dehoard --apply                  → actually reclaim Tier 1 space
-  dehoard --deep                   → + Tier 2 aggressive caches (preview)
-  dehoard --models                 → + interactive LLM/ML model cleanup
-  dehoard --scan                   → + interactive project artifact scan
-  dehoard --report                 → read-only disk audit (what's eating space)
-    ↳ bare 'dehoard' PREVIEWS the cleanup; '--report' AUDITS your disk. Neither deletes.
-  dehoard --deep --models --scan --apply → everything, for real
+  scree                          → PREVIEW Tier 1 (always-safe) cleanup
+  scree --apply                  → actually reclaim Tier 1 space
+  scree --deep                   → + Tier 2 aggressive caches (preview)
+  scree --models                 → + interactive LLM/ML model cleanup
+  scree --scan                   → + interactive project artifact scan
+  scree --report                 → read-only disk audit (what's eating space)
+    ↳ bare 'scree' PREVIEWS the cleanup; '--report' AUDITS your disk. Neither deletes.
+  scree --deep --models --scan --apply → everything, for real
 
 FLAGS
   --apply         actually delete (default is preview-only)
-  --dry-run       force preview, overrides --apply and DEHOARD_APPLY_DEFAULT
+  --dry-run       force preview, overrides --apply and SCREE_APPLY_DEFAULT
   --yes / -y      auto-confirm every prompt (combine with --apply; use with care)
   --pick          interactive fzf picker for --scan candidates: ONE picker per category, biggest first
                   (implies --scan; needs fzf + --apply). Interactive-only: runs JUST the pickers, not
@@ -24,40 +24,40 @@ FLAGS
                   Falls back to per-item prompts without fzf; under --dry-run it just previews the list.
   --report        read-only audit; never deletes
   --json          machine-readable model inventory (implies --report; pure JSON on stdout)
-                  e.g. dehoard --json | jq '.cross_tool_duplicates'
+                  e.g. scree --json | jq '.cross_tool_duplicates'
   --trash         move deletions to ~/.Trash instead of removing them (undo-able).
                   NOTE: a trashed file still occupies its blocks, so this frees NOTHING until you
                   empty the Trash. Reported separately from "Storage freed" for that reason.
   --snapshot      same as --json, and also archives the document to
-                  ~/.cache/dehoard/snapshots/<UTC-timestamp>.json. Run it on a schedule to
+                  ~/.cache/scree/snapshots/<UTC-timestamp>.json. Run it on a schedule to
                   see what regrew between two dates:
                     diff <(jq -S . old.json) <(jq -S . new.json)
   --list-ignored       show paths you've marked 'always skip'
   --unignore <path>    remove one path from the always-skip list
   --reset-ignore       clear the entire always-skip list and re-prompt everything
-  --uninstall          remove dehoard: the deletion logs (~/.cache/dehoard) and the script. Keeps
-                       your ignore list (~/.config/dehoard); preview-first, --dry-run to see the plan
+  --uninstall          remove scree: the deletion logs (~/.cache/scree) and the script. Keeps
+                       your ignore list (~/.config/scree); preview-first, --dry-run to see the plan
   --purge              like --uninstall, but ALSO removes your ignore list (prints it first)
   --version / -V       print version and exit
 
 ENVIRONMENT
   Every knob is an environment variable; there are no config files. Numeric ones must be bare
   integers (a non-numeric value is reported on stderr and the default is used instead).
-    DEHOARD_APPLY_DEFAULT       false  'true' makes --apply the default (--dry-run still wins)
-    DEHOARD_IGNORE_ENABLED      true   'false' disables the always-skip list entirely
+    SCREE_APPLY_DEFAULT       false  'true' makes --apply the default (--dry-run still wins)
+    SCREE_IGNORE_ENABLED      true   'false' disables the always-skip list entirely
     CACHE_MIN_MB                100    minimum size (MB) for a cache dir to be listed
-    DEHOARD_PM_TIMEOUT          120    seconds before one hung package-manager cleanup is skipped
-    DEHOARD_HELD_OPEN_MIN_GB    5      per-process floor (GB) for the held-open-files warning
-    DEHOARD_VM_IMAGE_MIN_MB     500    minimum size (MB) for a VM/container disk image to be listed
-    DEHOARD_SIZE_TIMEOUT        20     seconds before one directory-size probe is abandoned
-    DEHOARD_SWEEP_TIMEOUT       45     seconds before --report's cache-ranking sweep is abandoned
-    DEHOARD_XCODE_DEVICESUPPORT_KEEP 2  iOS device-support versions to keep (1-3 GB each)
-    DEHOARD_DEBUG               unset  set to any value to trace skipped paths on stderr
-    DEHOARD_SIZE_TIMEOUT        20     seconds before one directory-size probe is abandoned
+    SCREE_PM_TIMEOUT          120    seconds before one hung package-manager cleanup is skipped
+    SCREE_HELD_OPEN_MIN_GB    5      per-process floor (GB) for the held-open-files warning
+    SCREE_VM_IMAGE_MIN_MB     500    minimum size (MB) for a VM/container disk image to be listed
+    SCREE_SIZE_TIMEOUT        20     seconds before one directory-size probe is abandoned
+    SCREE_SWEEP_TIMEOUT       45     seconds before --report's cache-ranking sweep is abandoned
+    SCREE_XCODE_DEVICESUPPORT_KEEP 2  iOS device-support versions to keep (1-3 GB each)
+    SCREE_DEBUG               unset  set to any value to trace skipped paths on stderr
+    SCREE_SIZE_TIMEOUT        20     seconds before one directory-size probe is abandoned
     NO_COLOR / CLICOLOR_FORCE   unset  disable / force terminal color
     XDG_CACHE_HOME              ~/.cache   holds run logs + --snapshot archives
     XDG_CONFIG_HOME             ~/.config  holds the ignore list
-  e.g.  DEHOARD_HELD_OPEN_MIN_GB=20 dehoard --report
+  e.g.  SCREE_HELD_OPEN_MIN_GB=20 scree --report
 
 Flags combine in any order. Without --apply, every run is a safe preview.
 Recommended: run once to preview, then add --apply. Tier 1 always runs first.
@@ -250,7 +250,7 @@ TIER 2: Only with --deep. There is a real cost after deletion.
      whose runtime is no longer installed. Never deletes active simulators.
      Also clears ~/Library/Developer/CoreSimulator/Caches.
      Does NOT remove runtimes themselves. Runtimes are the big ones (tens of
-     GB) and Xcode silently reinstalls them on update. dehoard leaves them
+     GB) and Xcode silently reinstalls them on update. scree leaves them
      alone because 'simctl runtime delete all' cannot be scoped to unused
      ones or previewed per-item. To clear them yourself:
        xcrun simctl runtime list          # see what is installed
@@ -493,7 +493,7 @@ SCAN (--scan): Crawls your project tree. Per-entry prompts.
      Leftover data dirs of dev/ML tools whose binary/app is gone (e.g.
      ~/.ollama after Ollama is removed). Conservative: only flags tools
      reliably detectable as absent. General app-uninstall leftovers are
-     out of scope, a dedicated app uninstaller is the right tool; dehoard
+     out of scope, a dedicated app uninstaller is the right tool; scree
      does not scan all of ~/Library.
 
   ── Tool caches >100 MB (~/.cache, ~/Library/Caches) ── PER ENTRY
@@ -508,7 +508,7 @@ SCAN (--scan): Crawls your project tree. Per-entry prompts.
 
   • Close Chrome and Brave before running (for clone deletion)
   • You will be prompted for sudo password once (for tmutil)
-  • Do NOT run as: sudo zsh dehoard.sh, breaks Homebrew/npm/pip
+  • Do NOT run as: sudo zsh scree.sh, breaks Homebrew/npm/pip
   • Safe to run repeatedly, missing paths are silently skipped
   • Free space is measured before and after; shown at the end
   • --dry-run works with any flag combo, shows what would be

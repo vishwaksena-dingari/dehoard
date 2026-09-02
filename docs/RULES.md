@@ -1,14 +1,14 @@
-# dehoard rules and scope
+# scree rules and scope
 
-The rules by which dehoard decides what is safe to delete. This is the safety contract for an
+The rules by which scree decides what is safe to delete. This is the safety contract for an
 auditable tool that runs `rm`. It describes how the tool behaves today. The final section states the
 rules any future cleanup additions must obey, and is marked as not yet machine-enforced.
 
-This document governs `dehoard.sh` only. It contains no personal paths and no strategy, by design.
+This document governs `scree.sh` only. It contains no personal paths and no strategy, by design.
 
 ## Scope
 
-dehoard reclaims disk on developer and ML machines by removing regenerable junk: package-manager
+scree reclaims disk on developer and ML machines by removing regenerable junk: package-manager
 download caches, build artifacts, virtual environments, compiler and GPU caches, container disk
 images, editor leftovers, and similar. It also reports, but never deletes, the local LLM/ML model
 weights spread across tools.
@@ -17,7 +17,7 @@ Out of scope: general application uninstalling, a whole `~/Library` sweep, and n
 hogs (Photos, iOS backups, Mail). Those need a different trust model and are a different tool's job.
 
 `~/cleanup.sh` is a separate, private tool on its own track. It uses hardcoded personal paths and
-deletes by default. It is never a source for dehoard: do not ingest it, merge from it, or model new
+deletes by default. It is never a source for scree: do not ingest it, merge from it, or model new
 rules on it. A rule that came from it could leak a personal path or carry delete-by-default behavior
 into the public tool.
 
@@ -26,14 +26,14 @@ into the public tool.
 A path is safe to delete only when both hold:
 
 1. It is **regenerable**. The system recreates it on next use, it can be re-downloaded, or it can be
-   rebuilt from source that dehoard does not touch. Examples: a package download cache, a compiler
+   rebuilt from source that scree does not touch. Examples: a package download cache, a compiler
    cache, a build directory, a `.ipynb_checkpoints` folder.
 2. It is **under a safe root** (see the `_rm` contract below).
 
 An **orphaned** tool directory qualifies as a leftover only when both the tool's binary and its
 `.app` are absent. A path that is merely old, or large, or unrecognized does not qualify.
 
-Never deletable. The following are user data. dehoard detects and reports them, and never removes
+Never deletable. The following are user data. scree detects and reports them, and never removes
 them automatically: model weights, model outputs, chat and session history, source code, git
 history, and configuration files. Anything non-regenerable is reported, not deleted.
 
@@ -51,19 +51,19 @@ history, and configuration files. Anything non-regenerable is reported, not dele
    `sudo rm` (it can't run through the user-space guard); `--models` uses `ollama rm`; interactive
    `--scan` (both the per-entry prompts and `--pick`) delegates env-managers
    (conda/uv/Android/Rust) to their native uninstaller, falling back to `_rm`; plus a trivial `rmdir` of
-   emptied parent dirs and removal of dehoard's own ignore file. `--uninstall`/`--purge` removes
-   dehoard's own footprint (a fixed set of `$HOME`-relative paths: the logs dir, the config dir, the
+   emptied parent dirs and removal of scree's own ignore file. `--uninstall`/`--purge` removes
+   scree's own footprint (a fixed set of `$HOME`-relative paths: the logs dir, the config dir, the
    standard script) with a plain `rm -rf` behind its own preview and confirm; it is the one sanctioned
    exception that deletes the tool itself rather than a cleanup candidate. New code must not add a deleter
    of user cleanup paths outside `_rm`, and these are the exhaustive list.
 
 ## The `_rm` contract
 
-`_rm` is the central primitive for path deletion: nearly every path dehoard removes flows through it.
+`_rm` is the central primitive for path deletion: nearly every path scree removes flows through it.
 The audited exceptions delete outside it (all `--apply`-gated): `--deep`'s `sudo rm` system-cache
 sweep, `--models`' `ollama rm`, interactive `--scan`'s native env-manager
 uninstallers (per-entry prompts and `--pick` alike, with an `_rm` fallback), trivial
-`rmdir`/own-ignore-file cleanup, and `--uninstall`/`--purge`'s `rm -rf` of dehoard's own footprint
+`rmdir`/own-ignore-file cleanup, and `--uninstall`/`--purge`'s `rm -rf` of scree's own footprint
 (fixed `$HOME`-relative paths, behind its own preview and confirm). For everything that does flow
 through it, `_rm` enforces: 
 
@@ -73,7 +73,7 @@ through it, `_rm` enforces:
 - **Safe-root whitelist.** A target is deleted only when it falls under one of these roots.
   Anything outside them is refused, even if a temp variable is mis-set.
 
-<!-- safe-roots:begin (parsed by test/run.zsh against _rm in dehoard.sh; keep this list in sync) -->
+<!-- safe-roots:begin (parsed by test/run.zsh against _rm in scree.sh; keep this list in sync) -->
 - `$HOME`
 - `/var/folders`
 - `/private/var/folders`
@@ -82,7 +82,7 @@ through it, `_rm` enforces:
 <!-- safe-roots:end -->
 
 Under `--apply`, `_rm` echoes each removed path and its size as it goes, and appends the same record
-to a deletion log under `~/.cache/dehoard/`.
+to a deletion log under `~/.cache/scree/`.
 
 The `--scan --pick` picker removes environment managers (conda/uv/Android/Rust) through their native
 uninstaller so they leave no stale metadata; if that uninstaller is absent or fails it falls back to
@@ -136,7 +136,7 @@ by an assisted tool, stays inside the safety envelope above.
 - Every **newly proposed** cleanup deletes through `_rm` and inherits the safe-root whitelist. A
   cleanup proposal cannot widen that whitelist or introduce its own delete call; the non-`_rm` deleters
   listed in the `_rm` contract are the exhaustive audited set, and a cleanup never adds to it. (Those
-  exceptions remove system caches or dehoard's own footprint, never a user cleanup candidate.)
+  exceptions remove system caches or scree's own footprint, never a user cleanup candidate.)
 - Output is **preview-first** and merged by a human. The proposing tool does not execute deletions.
 - A proposal is **refused** when it would: target non-regenerable user data; reach a path outside
   the safe roots; require a raw `rm` or any delete outside `_rm`; or require a hardcoded personal

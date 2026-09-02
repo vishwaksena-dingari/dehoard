@@ -66,7 +66,7 @@ The `orca` case is the instructive one: the proposed keep-rule was redundant bec
 Electron sweep whitelists only canonical cache subfolder *names*, so it **cannot** reach an app's
 session data by construction. The existing design was stronger than the proposed patch.
 
-**Rule.** `grep dehoard.sh` before writing a rule. Finding something on one machine is not evidence
+**Rule.** `grep scree.sh` before writing a rule. Finding something on one machine is not evidence
 that the tool misses it. Prefer strengthening a generic mechanism over adding a named special case.
 
 ## 5. `find` / `ls` output word-splits on real paths
@@ -110,7 +110,7 @@ is executed at ~30 sites and most are not `_rm` (`$DRY_RUN || chmod -R u+w`, the
 
 ## 8. Warnings on stdout corrupt a data contract
 
-The unknown-flag warning went to stdout, so `dehoard --json --typo` emitted an unparseable document.
+The unknown-flag warning went to stdout, so `scree --json --typo` emitted an unparseable document.
 
 **Rule.** Anything that is not the data itself goes to stderr. `--json`/`--snapshot` stdout is a
 contract.
@@ -229,7 +229,7 @@ does not exist until its definition has executed. A blank appeared where a size 
   on `du` of an empty directory (3 ms, measured), and on self-inflicted process contention — before
   timing `docker info` directly, which hung for 300s. Measure the suspect, not the neighbourhood.
 - **Revert an optimisation that measures worse, however good the reasoning.** Skipping the app
-  sandbox container trees in the home scan was sound in theory: they are slow *and* dehoard never
+  sandbox container trees in the home scan was sound in theory: they are slow *and* scree never
   cleans them. It measured 437s against a 139–158s baseline. One `du` traversing once beats N
   invocations each re-walking a child. Complexity has to earn its place with a number.
 - **An unexplained change that deletes real files does not ship**, regardless of motivation. C4 was

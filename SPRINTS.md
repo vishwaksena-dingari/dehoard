@@ -1,4 +1,4 @@
-# dehoard completion plan
+# scree completion plan
 
 Baseline: 8158f27, 175 assertions + 12 stress, CI green, v0.2.8 shipped.
 Rule for every task: implement, then verify by NEGATIVE CONTROL (break it, watch the test go red).
@@ -23,7 +23,7 @@ Measured rather than assumed, and the assumptions were wrong:
 - The same --apply command measured 7.8s, 14.3s, 16.0s and 20.6s on an empty fixture within a few
   minutes. The variance EXCEEDS the signal, so nothing here can be optimised with confidence on
   this machine.
-Conclusion: the suite is ~10 min because it runs ~100 real dehoard invocations. That is inherent to
+Conclusion: the suite is ~10 min because it runs ~100 real scree invocations. That is inherent to
 integration tests that spawn the real binary, not a defect. CI runs it reliably; local iteration
 uses test/stress-apply.zsh (~20s) plus targeted isolation harnesses.
 
@@ -39,7 +39,7 @@ S3.2  --report is 2-3 min on a real machine: profile, then bound the du sweep
 S3.3  DECLINED after measurement. A window-4 PID-array pool over 12 directories measured 0.191s
       against 0.265s sequential - a 28% gain on a synthetic best case, and directory sizing is no
       longer the dominant cost now that plain files are batched through one stat and the whole probe
-      is bounded by DEHOARD_SIZE_TIMEOUT. Concurrency in the code path that DELETES files buys
+      is bounded by SCREE_SIZE_TIMEOUT. Concurrency in the code path that DELETES files buys
       background jobs, PID bookkeeping and interrupt handling, and the orphaned-grandchild bug
       already found in _run_timeout is exactly the failure mode it invites. Not worth 28%.
 
@@ -51,12 +51,12 @@ S4.4  stale login items, report-only
 S4.5  DECLINED after measurement. Of the 22 optimize actions surveyed, only four reclaim disk at
       all, and on this machine the largest of them - Saved Application State - is 12 KB. The rest
       are DNS flushes, Spotlight reindexing and permission repairs: maintenance, not reclamation,
-      and several need sudo. dehoard never asking for sudo is a genuine differentiator worth
+      and several need sudo. scree never asking for sudo is a genuine differentiator worth
       keeping, and a "cleaner" that flushes DNS is pretending to work. Not built.
 
 ## Sprint 5 - release
 S5.1  INCONCLUSIVE this round, and the reason matters more than the number.
-      dehoard v0.2.9 --deep --dry-run: 9.13 GB across 122 items, completed.
+      scree v0.2.9 --deep --dry-run: 9.13 GB across 122 items, completed.
       Mole: did not finish. It ran past 20 minutes and stalled in its "App caches" section, versus
       4:54 for a full run earlier the same day. Its own source documents that section's live-cache
       probing (reverse-DNS process matching plus lsof per container) as the expensive one.
@@ -75,7 +75,7 @@ S5.4  tag v0.2.9
 tree showed `du -sk ~/Library` alone runs past ten minutes, almost entirely
 ~/Library/Containers and ~/Library/Group Containers - thousands of tiny per-app sandbox files, one
 bundle alone holding 2843. Those are also the least useful thing the section can show, since
-dehoard never cleans them: they are app data, not cache.
+scree never cleans them: they are app data, not cache.
 
 Skipping them looked like the rare optimisation that costs nothing. It was not.
 

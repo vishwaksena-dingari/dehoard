@@ -1,6 +1,6 @@
 # Safety model
 
-dehoard runs `rm`. This page documents the guarantees that make it safe to point at your machine,
+scree runs `rm`. This page documents the guarantees that make it safe to point at your machine,
 the single guard that enforces them, and the test suite that proves they hold.
 
 ## The deletion contract
@@ -8,22 +8,22 @@ the single guard that enforces them, and the test suite that proves they hold.
 1. **Preview by default.** A bare run, and every `--report` / `--json` run, deletes nothing. The
    only thing that enables deletion is the explicit `--apply` flag.
 2. **`--dry-run` always wins.** If both `--apply` and `--dry-run` are present (or
-   `DEHOARD_APPLY_DEFAULT=true` is set), preview wins, you can always force a safe run.
-3. **Refuses to run as root.** Running under `sudo` exits immediately. dehoard can therefore never
+   `SCREE_APPLY_DEFAULT=true` is set), preview wins, you can always force a safe run.
+3. **Refuses to run as root.** Running under `sudo` exits immediately. scree can therefore never
    modify system-owned files; it operates only within your user account.
 4. **Deletion is irreversible by default.** Removal is a real `rm -rf`, not a move to the Trash.
    There is no undo. This is *why* preview-first is the default: read the preview, then apply.
    The one exception is opt-in: `--trash` moves deletions to `~/.Trash` so they can be restored.
    It is deliberately **not** the default, because a trashed file still occupies its blocks — under
-   `--trash` dehoard reclaims nothing until you empty the Trash, so those bytes are reported
+   `--trash` scree reclaims nothing until you empty the Trash, so those bytes are reported
    separately and never counted as "freed".
 5. **Your data is never a target.** Model weights, generated outputs, chat/session history, source
    code, git history, and configuration are detected and kept. Only regenerable caches, build
    artifacts, and downloadable assets are eligible for deletion.
 6. **Everything `_rm` removes is logged.** Under `--apply`, each path `_rm` deletes and its size is
-   appended to `~/.cache/dehoard/run-<timestamp>.log`. (The few deletions that bypass `_rm`, namely
+   appended to `~/.cache/scree/run-<timestamp>.log`. (The few deletions that bypass `_rm`, namely
    `--deep`'s `sudo` system-cache sweep, `--models`' `ollama rm`, interactive `--scan`'s native
-   env-manager uninstallers, and `--uninstall`/`--purge` removing dehoard's own footprint, are not in
+   env-manager uninstallers, and `--uninstall`/`--purge` removing scree's own footprint, are not in
    this log.)
 
 ### Questions people ask before running a file-deleter
@@ -53,19 +53,19 @@ the single guard that enforces them, and the test suite that proves they hold.
   reprints the chosen set and asks once. `--pick` is interactive-only (it does not run the Tier 1/Tier 2
   batch sweeps), an empty selection or Esc skips that category and deletes nothing, and env-manager
   removals (conda/uv/Android/Rust)
-  are delegated to their native uninstaller (which manages its own files), while every path dehoard
+  are delegated to their native uninstaller (which manages its own files), while every path scree
   removes itself still passes the `_rm` guard below. In all cases nothing deletes without `--apply`,
   and any path on your ignore list is skipped and announced.
 
 ## The `_rm` safe-root guard
 
-Nearly every path dehoard removes goes through one function, `_rm`, the central chokepoint that
+Nearly every path scree removes goes through one function, `_rm`, the central chokepoint that
 applies the whitelist so no individual cleanup rule has to. A few audited deletions delete outside it,
 all `--apply`-gated: `--deep`'s root-owned system-cache sweep (`sudo rm`, which can't run through the
 user-space guard), `--models`' `ollama rm`, interactive
 `--scan` (both the per-entry prompts and `--pick`) handing an environment to its native manager
 (conda/uv/sdkmanager/cargo, falling back to `_rm`), a trivial `rmdir` of emptied parent dirs, and
-`--uninstall`/`--purge` removing dehoard's own footprint (a fixed set of `$HOME`-relative paths,
+`--uninstall`/`--purge` removing scree's own footprint (a fixed set of `$HOME`-relative paths,
 behind its own preview and confirm). Everything else funnels through the guard below:
 
 ```mermaid
@@ -103,8 +103,8 @@ check above: `$DRY_RUN` is executed as a boolean command at roughly thirty sites
 Guarding one consumer would leave every other door open. Frozen, any later assignment aborts the run
 loudly rather than silently switching it into deletion.
 
-**Numeric environment variables are validated before use.** `CACHE_MIN_MB`, `DEHOARD_PM_TIMEOUT`,
-and `DEHOARD_HELD_OPEN_MIN_GB` must be bare non-negative integers; a non-numeric value is reported
+**Numeric environment variables are validated before use.** `CACHE_MIN_MB`, `SCREE_PM_TIMEOUT`,
+and `SCREE_HELD_OPEN_MIN_GB` must be bare non-negative integers; a non-numeric value is reported
 on stderr and replaced with its documented default. This is a safety guard rather than input
 hygiene. zsh evaluates a variable's *value* inside an arithmetic context, recursively, and zsh
 arithmetic supports assignment — so `SOME_NUMERIC_VAR='(DRY_RUN=0)'` would not produce a wrong
@@ -113,14 +113,14 @@ deletion. Validating at the boundary and demanding a legal flag at the chokepoin
 *both* in place: the first closes the known routes, the second makes the whole class unreachable
 even from a route nobody has thought of yet.
 
-Why a central guard matters: dehoard has dozens of cleanup rules across many tools. If each one
+Why a central guard matters: scree has dozens of cleanup rules across many tools. If each one
 called `rm` directly, a single bad glob or a mis-computed temp path (for example, `$TMPDIR` being
 unset) could escape. Routing **all** deletions through `_rm` means the safe-root whitelist is
 enforced once, consistently, no matter which rule requested the delete.
 
 ## Ignore list
 
-When you decline a deletion prompt under `--apply`, dehoard offers to remember that choice:
+When you decline a deletion prompt under `--apply`, scree offers to remember that choice:
 
 ```mermaid
 stateDiagram-v2
@@ -133,22 +133,22 @@ stateDiagram-v2
     Ignored --> Prompted: --unignore path  /  --reset-ignore
 ```
 
-- The ignore file (`~/.config/dehoard/ignore`, honoring `XDG_CONFIG_HOME`) is plain text, one absolute
+- The ignore file (`~/.config/scree/ignore`, honoring `XDG_CONFIG_HOME`) is plain text, one absolute
   path per line, and you can edit it directly. It is treated as user config: `--uninstall` keeps it,
-  `--purge` removes it. (An ignore file from an older version under `~/.cache/dehoard/` is migrated to
+  `--purge` removes it. (An ignore file from an older version under `~/.cache/scree/` is migrated to
   this location automatically on the next run.)
 - It is **opt-in**: it only ever exists if you explicitly answer "Always skip?". Nothing is written
   during `--report`, `--dry-run`, or a bare preview.
 - Every skip is **announced** (`⊘ always-skip`), nothing is silently bypassed, and if the list has
-  any entries, dehoard says so at startup.
+  any entries, scree says so at startup.
 - Manage it with `--list-ignored`, `--unignore <path>`, `--reset-ignore`, or by editing the file.
-- Set `DEHOARD_IGNORE_ENABLED=false` to disable the feature entirely (no prompts, file never
+- Set `SCREE_IGNORE_ENABLED=false` to disable the feature entirely (no prompts, file never
   read/written).
 
 ## The test contract
 
 The guarantees above are not promises in prose, they're enforced by a fixture-based test suite
-(`test/run.zsh`) that runs in CI on macOS. It points dehoard at a throwaway `$HOME` and asserts,
+(`test/run.zsh`) that runs in CI on macOS. It points scree at a throwaway `$HOME` and asserts,
 among other things, that:
 
 - a bare run (no `--apply`) deletes nothing;
