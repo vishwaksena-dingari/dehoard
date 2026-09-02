@@ -1613,6 +1613,18 @@ _run_picker() {
 _CANCELLED=false
 _is_cancelled() { [[ "$_CANCELLED" == true ]]; }
 
+# kb -> human string. TOP LEVEL, deliberately. This lived inside run_report, so callers outside it
+# - _rm's deletion line among them - silently got an empty string, and callers EARLIER in
+# run_report than the definition got one too, because a nested function does not exist until its
+# definition has executed. Both produced a blank size where a number belonged, with no error.
+_hkb() {  # kb -> human
+  local kb=$1
+  [[ "$kb" == <-> ]] || { printf "unknown"; return 0; }
+  if   (( kb >= 1048576 )); then printf "%.1fG" "$(( kb/1048576.0 ))"
+  elif (( kb >= 1024 ));    then printf "%.1fM" "$(( kb/1024.0 ))"
+  else printf "%dK" "$kb"; fi
+}
+
 
 
 # Skip-branch tracing. Preview output prints only POSITIVES - what would be deleted - and is
@@ -1699,7 +1711,7 @@ if $REPORT; then
     [[ -d "$cache_root" ]] || continue
     du -sk "$cache_root"/*/ 2>/dev/null | sort -rn | head -8 | while read kb cdir; do
       (( kb >= CACHE_MIN_MB * 1024 )) && printf "  %-7s %-30s %s\n" \
-        "$(du -sh "$cdir" 2>/dev/null | cut -f1)" "${cdir/#$HOME/~}" "--scan (generic)"
+        "$(_hkb "$kb")" "${cdir/#$HOME/~}" "--scan (generic)"
     done
   done
 
@@ -1729,10 +1741,14 @@ if $REPORT; then
   # turning a read-only number into a deletion mistake. (Pinned by the hardlink test in test/run.zsh.)
   _mw_row() {  # $1 = path, $2 = label
     [[ -d "$1" ]] || return
-    local kb; kb=$(du -sk "$1" 2>/dev/null | cut -f1)
+    # ONE walk, not two. This ran `du -sk` and then `du -sh` over the same tree for a single row -
+    # the identical defect already fixed in _rm - so every model root was measured twice. The human
+    # string comes from the KB figure via _hkb. Bounded, so one stalled tree cannot hold --report.
+    local kb; kb=$(_run_timeout "${DEHOARD_SIZE_TIMEOUT:-20}" du -sk "$1" 2>/dev/null | cut -f1)
+    [[ "$kb" == <-> ]] || return
     (( kb > 0 )) || return
     _mw_total_kb=$(( _mw_total_kb + kb ))
-    printf "  %8s  %-18s %s\n" "$(du -sh "$1" 2>/dev/null | cut -f1)" "$2" "${1/#$HOME/~}"
+    printf "  %8s  %-18s %s\n" "$(_hkb "$kb")" "$2" "${1/#$HOME/~}"
   }
   _mw_row ~/.cache/huggingface/hub   "HuggingFace"
   _mw_row ~/.ollama/models           "Ollama"
@@ -1756,12 +1772,6 @@ if $REPORT; then
   # Matched by NORMALIZED NAME (family + param count), NOT by bytes, formats differ
   # (safetensors vs GGUF vs blobs). So this is a *potential-duplicate* flag, never an
   # auto-delete: a Q4≠Q8 and base≠instruct. Remove via --models only, after you verify.
-  _hkb() {  # kb → human
-    local kb=$1
-    if   (( kb >= 1048576 )); then printf "%.1fG" "$(( kb/1048576.0 ))"
-    elif (( kb >= 1024 ));    then printf "%dM" "$(( kb/1024 ))"
-    else printf "%dK" "$kb"; fi
-  }
   # ── JSON emit helpers (no jq dependency; hand-rolled, escaping-safe) ──
   _json_str() {  # $1 → a JSON-escaped, double-quoted string
     local s="${1:-}"
