@@ -9,7 +9,7 @@ emulate zsh
 setopt NULL_GLOB
 
 # Version, keep in sync with the CHANGELOG release heading and the git tag.
-DEHOARD_VERSION="0.2.9"
+DEHOARD_VERSION="0.2.10"
 
 # ─── USER CONFIG ────────────────────────────────────────────────────────────
 # Extra directories to include when scanning for projects (git gc, etc.).

@@ -3,6 +3,26 @@
 All notable changes to `dehoard` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [0.2.10]: 2026-09-02
+
+### Fixed
+- **`--report` could hang indefinitely, and was the slowest thing dehoard did.** The audit opens
+  with `du -h -d 2 ~`, a depth-2 walk of the entire home directory, and that call was unbounded —
+  so a slow or stalled subtree made a *read-only* report look frozen before it printed anything
+  useful. Measured on a real machine: **over 600s on 0.2.9, 175s after**. With `du` stubbed to hang
+  and a 3s limit, 308s becomes 14s.
+- Every other sizing call in `--report` is now bounded too: the cache-ranking sweep (17.4s for
+  `~/Library/Caches`, 5.3s for `~/.cache`), model roots, VM images, extension caches and orphan
+  candidates — eight in all. On timeout a section is shorter, never wrong.
+- New `DEHOARD_SWEEP_TIMEOUT` (default 45s) for the ranking sweeps, alongside
+  `DEHOARD_SIZE_TIMEOUT` for individual probes.
+
+### Notes
+- Finding this took three failed attempts. The greps I was working from matched `du -sk` and
+  `du -sh`; the offending call is `du -h -d 2`, so it never appeared in any list I searched.
+  Watching *where the output stopped* found it immediately. Pattern-matching for the shape of a bug
+  you have assumed will miss the one you have not.
+
 ## [0.2.9]: 2026-09-02
 
 ### Fixed
