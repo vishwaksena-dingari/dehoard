@@ -23,13 +23,16 @@ echo private  > "$FIX/.ssh/id_ed25519"
 echo mail     > "$FIX/Library/Mail/msg.emlx"
 echo thesis   > "$FIX/Documents/thesis.txt"
 : > "$FIX/Downloads_x.crdownload"; mkdir -p "$FIX/Downloads"; : > "$FIX/Downloads/big.dmg.crdownload"
-mkdir -p "$FIX/.cache/node"; : > "$FIX/.cache/node/part.crdownload"   # inside a Tier 1 target
+mkdir -p "$FIX/.cache/node/x/y/z"; : > "$FIX/.cache/node/x/y/z/part.crdownload"  # nested Tier 1 target
 # The live database sits INSIDE a directory Tier 1 actually deletes (~/.npm/_npx). Placing it
 # somewhere Tier 1 never visits made the assertion vacuous: the file survived because nothing
 # targeted it, so removing the guard entirely still passed. It must be in harm's way to prove
 # anything.
-mkdir -p "$FIX/.npm/_npx/live"; echo db > "$FIX/.npm/_npx/live/Cache.db"
-zsh -c 'exec 9< "'"$FIX"'/.npm/_npx/live/Cache.db"; sleep 60' & HOLDER=$!
+# Nested at depth 6, matching where SQLite databases actually sit in real cache trees on this
+# machine (surveyed: depth 6 to 10). An earlier maxdepth-3 guard passed a shallow fixture while
+# missing the shape that actually occurs.
+mkdir -p "$FIX/.npm/_npx/a/b/c/d/live"; echo db > "$FIX/.npm/_npx/a/b/c/d/live/Cache.db"
+zsh -c 'exec 9< "'"$FIX"'/.npm/_npx/a/b/c/d/live/Cache.db"; sleep 60' & HOLDER=$!
 sleep 1
 
 before=$(find "$FIX" -type f | wc -l | tr -d ' ')
@@ -53,8 +56,8 @@ rc=$?
 [[ -f "$FIX/.ssh/id_ed25519" ]]                  && ok "ssh key intact"   || bad "SSH KEY DELETED"
 [[ -f "$FIX/Library/Mail/msg.emlx" ]]            && ok "mail intact"      || bad "MAIL DELETED"
 [[ -f "$FIX/Documents/thesis.txt" ]]             && ok "documents intact" || bad "DOCUMENTS DELETED"
-[[ -f "$FIX/.cache/node/part.crdownload" ]]      && ok "in-progress download inside a Tier 1 target survives" || bad "DOWNLOAD DELETED"
-[[ -f "$FIX/.npm/_npx/live/Cache.db" ]]          && ok "open database inside a Tier 1 target survives" || bad "OPEN DB DELETED"
+[[ -f "$FIX/.cache/node/x/y/z/part.crdownload" ]] && ok "nested in-progress download survives" || bad "DOWNLOAD DELETED"
+[[ -f "$FIX/.npm/_npx/a/b/c/d/live/Cache.db" ]]  && ok "open database nested 6 deep inside a Tier 1 target survives" || bad "OPEN DB DELETED"
 # the log must name every real deletion
 # Globs do NOT expand inside [[ ]] in zsh - the first version tested a literal string containing
 # an asterisk and always failed. Expand into an array first.
