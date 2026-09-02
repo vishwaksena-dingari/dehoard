@@ -611,6 +611,28 @@ else
 fi
 rm -rf "$FIX"
 
+# Stale login items: report a LaunchAgent whose absolute target is gone, and do NOT report one
+# whose program is a bare command name resolved via $PATH. Testing a bare name with -e reports every
+# such agent as broken; on this machine that produced a false positive on the very first run.
+FIX=$(mktemp -d); mkdir -p "$FIX/Library/LaunchAgents"
+_mkagent() {  # $1 = label, $2 = program string
+  cat > "$FIX/Library/LaunchAgents/$1.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>Label</key><string>$1</string>
+<key>ProgramArguments</key><array><string>$2</string></array></dict></plist>
+PLIST
+}
+_mkagent com.gone.app /Applications/Deleted.app/Contents/MacOS/x
+_mkagent com.bare.cmd open
+out=$(HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --report 2>&1)
+[[ "$out" == *"com.gone.app"* ]] \
+  && ok "reports a login item whose absolute target is missing" \
+  || bad "missed a stale login item"
+[[ "$out" != *"com.bare.cmd"* ]] \
+  && ok "does NOT report a login item running a bare \$PATH command" \
+  || bad "false positive: reported a bare-command login item"
+rm -rf "$FIX"
+
 # Arithmetic-injection guard. zsh evaluates a variable's VALUE inside $(( )) recursively, and
 # arithmetic supports assignment — so a numeric env var set to `(DRY_RUN=0)` clobbers the flag
 # _rm branches on and silently turns a PREVIEW run into a real deletion. Regression: the victim

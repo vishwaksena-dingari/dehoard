@@ -1732,6 +1732,53 @@ if $REPORT; then
   done < <(find ~/"Library/Application Support" -maxdepth 4 -type f \
              \( -name '*.img' -o -name '*.img.zst' -o -name '*.raw' -o -name '*.qcow2' \
                 -o -name '*.vmdk' -o -name '*.vdi' \) -print0 2>/dev/null)
+  # Autodesk webdeploy: documented elsewhere at up to 60 GB, one directory per installed version.
+  # REPORT ONLY, and deliberately so. Deciding which version directories are superseded requires
+  # inspecting each 40-hex directory for exactly one application bundle and comparing against the
+  # currently-registered install - logic that cannot be written responsibly against a machine that
+  # does not have Autodesk on it, which this one does not. Reporting the total is useful and safe;
+  # guessing at deletion rules for a 60 GB tree, untested, is not.
+  if [[ -d ~/Library/Application\ Support/Autodesk/webdeploy/production ]]; then
+    _ad_kb=$(_run_timeout "${DEHOARD_SIZE_TIMEOUT:-20}" du -sk ~/Library/Application\ Support/Autodesk/webdeploy/production 2>/dev/null | cut -f1)
+    if [[ "$_ad_kb" == <-> ]] && (( _ad_kb > 512000 )); then
+      echo ""
+      echo "$(c_head "── Autodesk webdeploy ──")"
+      printf "  %8s  %s\n" "$(_hkb "$_ad_kb")" "~/Library/Application Support/Autodesk/webdeploy/production"
+      echo "$(c_dim "  Superseded installer payloads accumulate here, one directory per version.")"
+      echo "$(c_dim "  REPORTED ONLY - removing the wrong version breaks the running install. Use")"
+      echo "$(c_dim "  Autodesk's own uninstaller, or delete a version directory only if you are sure.")"
+    fi
+  fi
+
+  # Stale login items: user LaunchAgents whose target binary no longer exists. These are what is
+  # left when an app is dragged to the Trash without its uninstaller - launchd keeps trying to start
+  # something that is gone. REPORT ONLY: a plist may legitimately point at a helper installed later,
+  # or be re-created by the app on next launch, and reclaiming a few KB is not worth breaking
+  # startup for someone.
+  #
+  # Only ABSOLUTE paths are checked. A ProgramArguments entry is often a bare command name resolved
+  # via $PATH ("open"), and testing that with -e reports every such agent as broken - on this
+  # machine that produced a false positive for the Epic Games launcher on the first run.
+  local -a _stale_agents=()
+  local _pl _prog
+  for _pl in ~/Library/LaunchAgents/*.plist(N); do
+    _prog=$(plutil -extract ProgramArguments.0 raw -o - "$_pl" 2>/dev/null)
+    [[ -n "$_prog" ]] || _prog=$(plutil -extract Program raw -o - "$_pl" 2>/dev/null)
+    [[ "$_prog" == /* ]] || continue            # bare command name, resolved via PATH - not our call
+    [[ -e "$_prog" ]] && continue
+    _stale_agents+=("${_pl:t:r}|$_prog")
+  done
+  if (( ${#_stale_agents[@]} )); then
+    echo ""
+    echo "$(c_head "── Login items pointing at software that is gone ──")"
+    for _pl in $_stale_agents; do
+      printf "  %s\n" "${_pl%%|*}"
+      printf "      target missing: %s\n" "${_pl#*|}"
+    done
+    echo "$(c_dim "  REPORTED ONLY. launchd retries these at every login. Remove with:")"
+    echo "$(c_dim "    launchctl bootout gui/\$UID ~/Library/LaunchAgents/<name>.plist && rm <plist>")"
+  fi
+
   # Generic sweep: biggest entries in the XDG + macOS cache roots over 100 MB.
   # NOTE: loop var must NOT be named 'path', in zsh that is tied to $PATH and
   # reading into it clobbers the command search path.
@@ -2387,6 +2434,19 @@ if $DEEP; then
       _rm "$_v"
     done
   done
+
+  # Nix: delegate to nix's own garbage collector rather than touching /nix/store directly. The store
+  # is content-addressed with a database of live roots; deleting paths by hand corrupts it. Same
+  # pattern already used for brew, npm and pnpm - let the tool that owns the data decide what is
+  # reachable. 30 days keeps recent rollback generations usable.
+  if command -v nix-collect-garbage &>/dev/null; then
+    echo "$(c_step "Collecting Nix garbage (generations older than 30 days)...")"
+    if $DRY_RUN; then
+      echo "  [dry-run] would run: nix-collect-garbage --delete-older-than 30d"
+    else
+      _run_timeout "${DEHOARD_PM_TIMEOUT:-120}" nix-collect-garbage --delete-older-than 30d 2>/dev/null
+    fi
+  fi
 
   if command -v ccache &>/dev/null && [[ -d ~/.ccache ]]; then
     CCACHE_SIZE=$(du -sh ~/.ccache 2>/dev/null | cut -f1)
