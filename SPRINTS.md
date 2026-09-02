@@ -55,7 +55,16 @@ S4.5  DECLINED after measurement. Of the 22 optimize actions surveyed, only four
       keeping, and a "cleaner" that flushes DNS is pretending to work. Not built.
 
 ## Sprint 5 - release
-S5.1  full Mole re-comparison, both fresh, same machine
+S5.1  INCONCLUSIVE this round, and the reason matters more than the number.
+      dehoard v0.2.9 --deep --dry-run: 9.13 GB across 122 items, completed.
+      Mole: did not finish. It ran past 20 minutes and stalled in its "App caches" section, versus
+      4:54 for a full run earlier the same day. Its own source documents that section's live-cache
+      probing (reverse-DNS process matching plus lsof per container) as the expensive one.
+      The comparison is NOT valid as a head-to-head regardless, because the machine is not the same
+      machine: roughly 20 GB has been reclaimed between the two runs, including the 8 GB Rust target
+      tree that dominated the earlier figures. Comparing 20.56 GB found on a full disk against
+      9.13 GB found on a cleaned one measures the cleaning, not the tools.
+      A valid re-run needs a machine in a known state, ideally a fresh VM. Not something to fake.
 S5.2  docs sync: README, SAFETY, CHANGELOG, --help
 S5.3  multi-lens review over the whole diff since v0.2.8
 S5.4  tag v0.2.9
