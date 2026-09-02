@@ -1,14 +1,14 @@
-# Where local LLMs live: and how dehoard de-duplicates them
+# Where local LLMs live: and how scree de-duplicates them
 
 The single biggest hidden disk cost on an ML Mac is **the same model downloaded several times**.
 Each local-model tool keeps its own copy in its own location under its own naming scheme, so a
 machine can hold the same 8B model three or four times without the user ever realizing it. This page
-maps where models hide and explains exactly how dehoard decides what is a true duplicate.
+maps where models hide and explains exactly how scree decides what is a true duplicate.
 
 ## Who this is for
 
-- **A casual Ollama/LM Studio user** who just wants space back: run `dehoard --report` to see total
-  model footprint and any cross-tool duplicates, then `dehoard --models` to clear a tool you no longer
+- **A casual Ollama/LM Studio user** who just wants space back: run `scree --report` to see total
+  model footprint and any cross-tool duplicates, then `scree --models` to clear a tool you no longer
   use. You never need to understand quant or variant tokens to benefit.
 - **A developer** with a model or two from a side project: the duplicate report is a quick win, it
   tells you when the same model is sitting in two tools so you can drop one copy.
@@ -33,14 +33,14 @@ flowchart TD
     One --> Note["N physical copies, often several GB each"]
 ```
 
-| Tool | Where it stores models | How dehoard enumerates it |
+| Tool | Where it stores models | How scree enumerates it |
 |---|---|---|
 | HuggingFace | `~/.cache/huggingface/hub/models--<org>--<name>/` | directory listing |
 | Ollama | `~/.ollama/models` (content-addressed blobs + manifests) | `ollama list` (names + sizes) |
 | LM Studio | `~/.lmstudio/models/**/*.gguf` | `.gguf` file listing |
 | PyTorch hub | `~/.cache/torch/hub/checkpoints/` | file listing |
 
-Because the formats differ (safetensors vs GGUF vs content-addressed blobs), dehoard cannot dedupe
+Because the formats differ (safetensors vs GGUF vs content-addressed blobs), scree cannot dedupe
 by bytes. It matches by **normalized name** instead, so it must distinguish a genuine duplicate from
 a merely *related* one.
 
@@ -65,11 +65,11 @@ flowchart TD
 ```
 
 - A **true duplicate** is the same build sitting in two or more tools. Keeping one is safe, so
-  dehoard reports an estimated reclaim (everything except the largest single copy).
+  scree reports an estimated reclaim (everything except the largest single copy).
 - A **related variant** shares the family and size but differs in quant or base/instruct. These are
-  **not** interchangeable, so dehoard lists them for your awareness but **claims no reclaim**.
+  **not** interchangeable, so scree lists them for your awareness but **claims no reclaim**.
 - **Conservative by design:** an *unknown* quant never *creates* a conflict, so the headline still
-  fires for genuine matches, but dehoard never over-claims. And the whole feature is **report-only**:
+  fires for genuine matches, but scree never over-claims. And the whole feature is **report-only**:
   weights are never auto-deleted, and they are never offered in the `--scan --pick` picker either.
   You remove a redundant copy yourself via `--models` after verifying the two really are the same build.
 
@@ -79,13 +79,13 @@ Duplicate detection is strictly **cross-tool**: a group is reported only when th
 **two or more different tools** (the code requires `≥2 copies AND ≥2 tools`). Two copies of the same
 model *inside a single tool* are **not** flagged. In practice this almost never happens, Ollama is
 content-addressed (identical blobs are stored once, so it cannot hold a true byte-duplicate of itself),
-and the others key models by name. So "is `llama3:8b` duplicated *within* Ollama?" is a question dehoard
+and the others key models by name. So "is `llama3:8b` duplicated *within* Ollama?" is a question scree
 deliberately does not try to answer; "is `llama3:8b` *also* in LM Studio or HuggingFace?" is exactly
 what it answers.
 
 ## Actually removing a copy: the `--models` flow
 
-The report tells you *what* is redundant; `dehoard --models` is how you remove it. Be aware of its
+The report tells you *what* is redundant; `scree --models` is how you remove it. Be aware of its
 current granularity: it is **per tool, not per model**. For each tool it lists the models with sizes,
 then asks once before clearing that tool's set, e.g. *"Delete all Ollama models? [y/N]"*, *"Clear the
 entire HuggingFace cache?"*. It defaults to **No**, runs nothing without `--apply`, and skips entirely
@@ -100,7 +100,7 @@ is the map and the tool's own delete is the surgical instrument.
 
 ## JSON schema
 
-`dehoard --json` emits this inventory as pure JSON on stdout (read-only; nothing is deleted; all
+`scree --json` emits this inventory as pure JSON on stdout (read-only; nothing is deleted; all
 human/progress text is suppressed so the output pipes cleanly into `jq`). The schema is a **stable
 contract**: `schema_version` is incremented only on a breaking change, fields are added additively,
 sizes are integers (`size_bytes`), and unknown values are explicit `null`.
@@ -108,7 +108,7 @@ sizes are integers (`size_bytes`), and unknown values are explicit `null`.
 ```json
 {
   "schema_version": 1,
-  "generated_by": "dehoard",
+  "generated_by": "scree",
   "generated_at": "2026-06-01T00:00:00Z",
   "models": [
     {
@@ -159,13 +159,13 @@ Field notes:
 
 - **`held_open_deleted_bytes`** is the total size of files that have been deleted but are still held
   open by a running process. Those blocks stay allocated, so `df` under-reports free space until the
-  holding process exits. dehoard cannot reclaim them, and they are the main reason a reclaim tally
+  holding process exits. scree cannot reclaim them, and they are the main reason a reclaim tally
   can disagree with `df`. Unthresholded (the human-facing warning uses a 5 GB per-process floor to
   avoid crying wolf; a machine consumer wants the raw number). `0` if nothing is held or `lsof` is
   unavailable. Added in v0.2.7 without a `schema_version` bump: it is additive, so existing consumers
   are unaffected.
 
-- **`models[]`** lists one object per model copy for the cross-tool tools dehoard parses into a
+- **`models[]`** lists one object per model copy for the cross-tool tools scree parses into a
   family/quant/variant key (HuggingFace, Ollama, LM Studio, PyTorch hub). Framework caches shown in
   `--report`'s size footprint (Keras, Whisper, llama.cpp, GPT4All) are not enumerated here.
 - **`cross_tool_duplicates[]`** are the true duplicates; `reclaim_bytes` is the safe-to-reclaim
@@ -178,7 +178,7 @@ Field notes:
 Example queries:
 
 ```sh
-dehoard --json | jq '.total_reclaim_bytes'                       # bytes reclaimable from true dups
-dehoard --json | jq '.cross_tool_duplicates[] | {family, reclaim_bytes}'
-dehoard --json | jq '[.models[] | select(.tool=="Ollama")] | length'   # how many Ollama models
+scree --json | jq '.total_reclaim_bytes'                       # bytes reclaimable from true dups
+scree --json | jq '.cross_tool_duplicates[] | {family, reclaim_bytes}'
+scree --json | jq '[.models[] | select(.tool=="Ollama")] | length'   # how many Ollama models
 ```

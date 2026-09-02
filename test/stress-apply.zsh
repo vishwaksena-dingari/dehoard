@@ -1,5 +1,5 @@
 #!/usr/bin/env zsh
-# --apply stress test: one fixture containing every category dehoard touches, plus every class of
+# --apply stress test: one fixture containing every category scree touches, plus every class of
 # thing it must NOT touch, exercised through a REAL --apply run rather than _rm in isolation.
 emulate zsh; setopt NULL_GLOB
 SCRIPT="${1:?script path}"
@@ -66,7 +66,7 @@ rc=$?
 # the log must name every real deletion
 # Globs do NOT expand inside [[ ]] in zsh - the first version tested a literal string containing
 # an asterisk and always failed. Expand into an array first.
-_logs=("$FIX/.cache/dehoard/"run-*.log(N))
+_logs=("$FIX/.cache/scree/"run-*.log(N))
 if (( ${#_logs[@]} )); then
   ok "run log written"
 else

@@ -1,13 +1,13 @@
-# Contributing to dehoard
+# Contributing to scree
 
-Thanks for your interest! `dehoard` is a single auditable zsh script, small, safe, and focused.
+Thanks for your interest! `scree` is a single auditable zsh script, small, safe, and focused.
 
 ## Principles (please respect these in PRs)
 
 1. **Preview by default.** Nothing deletes without `--apply`. Every new cleanup path must go
    through the `_rm` helper (which is preview-aware and guards `$HOME` / `/`). A few existing
    deletions are audited exceptions (the `--deep` `sudo` system-cache sweep, `--models`' `ollama rm`,
-   the `--scan --pick` native env-manager uninstallers, and `--uninstall`/`--purge` removing dehoard's
+   the `--scan --pick` native env-manager uninstallers, and `--uninstall`/`--purge` removing scree's
    own footprint); do not add a new cleanup-path deleter outside `_rm`.
 2. **Only regenerable data.** We delete caches, build artifacts, re-downloadable framework/model
    *caches* (HuggingFace, NLTK, PyTorch hub), and editor-flagged stale versions, never user source,
@@ -15,7 +15,7 @@ Thanks for your interest! `dehoard` is a single auditable zsh script, small, saf
    only via an explicit `--models` choice, never in a Tier 1 or `--scan` batch sweep.
 3. **Machine-agnostic.** No hardcoded usernames, personal paths, or personal app bundle IDs.
    Drive everything off existence checks. CI rejects `/Users/<name>` paths.
-4. **Stay in the niche.** `dehoard` is for ML/dev Macs. We are *not* adding Photos/Mail/iOS-backup
+4. **Stay in the niche.** `scree` is for ML/dev Macs. We are *not* adding Photos/Mail/iOS-backup
    cleanup, that's CleanMyMac's lane and a different trust model.
 5. **Explain why it's safe.** Every item in `--help` says what it is, why it's safe to remove, and
    how it regenerates. New features must document this.
@@ -33,10 +33,10 @@ Thanks for your interest! `dehoard` is a single auditable zsh script, small, saf
 ## Testing
 
 ```sh
-zsh -n dehoard.sh                 # syntax
-zsh dehoard.sh --report           # read-only audit
-zsh dehoard.sh --scan             # preview (deletes nothing without --apply)
-grep -nE '/Users/[a-z]' dehoard.sh   # must be empty
+zsh -n scree.sh                 # syntax
+zsh scree.sh --report           # read-only audit
+zsh scree.sh --scan             # preview (deletes nothing without --apply)
+grep -nE '/Users/[a-z]' scree.sh   # must be empty
 ```
 
 Open an issue first for anything large. Thanks!
@@ -57,5 +57,5 @@ Two rules from it are worth repeating here, because they are the ones most often
 
 1. **A new test is not evidence until it has been observed to fail.** Revert the fix, watch the test
    go red, restore. Two tests in this repo passed for weeks while asserting nothing.
-2. **`grep dehoard.sh` before adding a cleanup rule.** Four proposed additions turned out to already
+2. **`grep scree.sh` before adding a cleanup rule.** Four proposed additions turned out to already
    exist, one of them with 51 references.

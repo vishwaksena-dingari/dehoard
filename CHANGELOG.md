@@ -1,12 +1,12 @@
 # Changelog
 
-All notable changes to `dehoard` are documented here.
+All notable changes to `scree` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
 ## [0.2.10]: 2026-09-02
 
 ### Fixed
-- **`--report` could hang indefinitely, and was the slowest thing dehoard did.** The audit opens
+- **`--report` could hang indefinitely, and was the slowest thing scree did.** The audit opens
   with `du -h -d 2 ~`, a depth-2 walk of the entire home directory, and that call was unbounded —
   so a slow or stalled subtree made a *read-only* report look frozen before it printed anything
   useful. Measured on a real machine: **over 600s on 0.2.9, 175s after**. With `du` stubbed to hang
@@ -14,8 +14,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow 
 - Every other sizing call in `--report` is now bounded too: the cache-ranking sweep (17.4s for
   `~/Library/Caches`, 5.3s for `~/.cache`), model roots, VM images, extension caches and orphan
   candidates — eight in all. On timeout a section is shorter, never wrong.
-- New `DEHOARD_SWEEP_TIMEOUT` (default 45s) for the ranking sweeps, alongside
-  `DEHOARD_SIZE_TIMEOUT` for individual probes.
+- New `SCREE_SWEEP_TIMEOUT` (default 45s) for the ranking sweeps, alongside
+  `SCREE_SIZE_TIMEOUT` for individual probes.
 
 ### Notes
 - Finding this took three failed attempts. The greps I was working from matched `du -sk` and
@@ -51,7 +51,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow 
   helper/updater bundles skipped, and directories named rather than counted. Before these, the only
   result on the development machine was a false positive.
 - Stale login items, `nix-collect-garbage`, and Autodesk webdeploy (report-only).
-- `DEHOARD_SIZE_TIMEOUT`, `DEHOARD_XCODE_DEVICESUPPORT_KEEP`, `DEHOARD_DEBUG`.
+- `SCREE_SIZE_TIMEOUT`, `SCREE_XCODE_DEVICESUPPORT_KEEP`, `SCREE_DEBUG`.
 
 ### Performance
 - One `lsof` snapshot per run instead of one probe per candidate: 4:02 → 10.5s over 20 calls.
@@ -71,7 +71,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow 
 - **`_run_timeout` never actually bounded anything with a nested process.** It backgrounds the
   command and kills `$pid` on expiry, but when the target is a wrapper script the thing blocking is
   a **grandchild**. Killing the wrapper orphans it, and the orphan keeps the inherited stdout open,
-  so every reader of dehoard's output blocks until it exits — the timeout returned 124 on schedule
+  so every reader of scree's output blocks until it exits — the timeout returned 124 on schedule
   while the run still appeared frozen. This is the hang protection used for *every* external tool,
   and the existing test passed only because its stub never nested a process. Descendants are now
   collected with `pgrep -P` **before** the parent is killed (afterwards they reparent and `-P` finds
@@ -118,12 +118,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow 
   real.
 
   Scope, verified against the released v0.2.6 rather than assumed:
-  - `DEHOARD_HELD_OPEN_MIN_GB` — **introduced and fixed within this unreleased version.** Evaluated
+  - `SCREE_HELD_OPEN_MIN_GB` — **introduced and fixed within this unreleased version.** Evaluated
     at top level, so the assignment propagated. Exploitable end-to-end; never shipped.
   - `CACHE_MIN_MB` — shipped since early versions, but **not** exploitable: one use site sits inside
     a `du … | while read` pipeline and the other inside a `$( … )` command substitution, both of
     which zsh runs in a subshell, so the assignment died with the subshell.
-  - `DEHOARD_PM_TIMEOUT` — shipped, and its arithmetic (`maxticks=$(( secs * 5 ))`) *is* in plain
+  - `SCREE_PM_TIMEOUT` — shipped, and its arithmetic (`maxticks=$(( secs * 5 ))`) *is* in plain
     function scope, but `_pm_run` is only called from the `else` branch of `if $DRY_RUN`, i.e. only
     under `--apply`, where deletion is already authorized. Not exploitable.
 
@@ -181,7 +181,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow 
   Electron cache sweep, which walks every directory in `Application Support`, so a running app
   rotating its own cache dirs could abort the run, with an error pointing nowhere near the cause.
   Both now read into a variable first, where an empty result is a plain `0`.
-- **The unknown-flag warning went to stdout, corrupting `--json`.** `dehoard --json --typo` emitted a
+- **The unknown-flag warning went to stdout, corrupting `--json`.** `scree --json --typo` emitted a
   warning line ahead of the document, so it failed to parse. Warnings now go to stderr, keeping the
   stdout data contract pure.
 - **No more "Freed 0 MB" notifications.** The macOS notification fired at the end of every completed
@@ -193,13 +193,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow 
   Center with ~100 banners full of throwaway fixture figures.
 - **Corrected a false claim in `--help`.** Item 10 said `xcrun simctl delete unavailable` "remove[s]
   simulator runtimes". It does not — it removes *devices*. Runtimes are the ones worth tens of GB and
-  Xcode silently reinstalls them on update. dehoard deliberately does not touch them (`simctl runtime
+  Xcode silently reinstalls them on update. scree deliberately does not touch them (`simctl runtime
   delete all` can be neither scoped to unused runtimes nor previewed per-item, which its
   preview-first contract requires), and now says so, with the manual command.
 
 ### Added
 - **`--snapshot`**: behaves exactly like `--json` and additionally archives the document to
-  `~/.cache/dehoard/snapshots/<UTC-timestamp>.json`. stdout stays pure JSON, so pipelines are
+  `~/.cache/scree/snapshots/<UTC-timestamp>.json`. stdout stays pure JSON, so pipelines are
   unaffected, and `--json` alone never writes anything. Reclaimed space has a half-life; this makes
   regrowth measurable after the fact. Diffing two snapshots is left to `jq` on purpose — no new
   schema contract is introduced. README documents a weekly `launchd` plist.
@@ -211,7 +211,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow 
   sandboxed containers, ~52s), so Docker keeps its individual entry.
 - **Held-open deleted files are now reported.** When a process holds a file that has been deleted,
   its blocks stay allocated and `df` under-reports free space until that process exits — so
-  dehoard's figure can look wrong for a reason dehoard did not cause. A process sitting on ≥5 GB is
+  scree's figure can look wrong for a reason scree did not cause. A process sitting on ≥5 GB is
   named in `--report` and after `--apply`. It states the fact and stops: it never suggests killing
   anything, because deciding to end a process is the user's call, not a cleaner's. The threshold is
   per-process, not total, because ~1.5 GB of ambient held inodes (plist caches, Spotlight, widgets)
@@ -222,13 +222,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow 
   correct). Note there is no `-u $USER`: lsof ORs selection flags unless `-a` is given, so
   `-u $USER +L1` would mean "this user's files OR deleted-open files" — 26x more rows.
   This does **not** change the reclaim tally into a `df` delta; a modest tally-vs-`df` gap remains
-  normal and expected. The threshold is tunable via `DEHOARD_HELD_OPEN_MIN_GB` (default `5`),
+  normal and expected. The threshold is tunable via `SCREE_HELD_OPEN_MIN_GB` (default `5`),
   alongside the existing knobs, because it was calibrated on an idle developer Mac and a machine
   running Docker, a database, or a long-lived browser can legitimately hold far more.
 - **`held_open_deleted_bytes` in `--json`** (additive; `schema_version` unchanged, existing
   consumers unaffected). Unthresholded, unlike the human warning: a machine consumer wants the raw
   figure to reconcile against `df` itself. `0` when nothing is held or `lsof` is unavailable.
-- **README: "Using dehoard from an agent."** `dehoard --json` already gives any shell-capable agent
+- **README: "Using scree from an agent."** `scree --json` already gives any shell-capable agent
   the full inventory with no install, no daemon, and no tool schema in the context window, so there
   is no MCP server. Documents the three rules: `--json` is read-only, stdout is pure JSON, and an
   agent must never call `--apply` — the `_rm` whitelist stops path bugs, not a correctly-executed
@@ -243,9 +243,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow 
   `held_open_deleted_bytes` is reported exactly both above and below the human threshold. Plus the
   arithmetic-injection regression: each of the three numeric env vars, set to `(DRY_RUN=0)`, must
   leave the victim file intact and still report a preview — and a valid numeric override must still
-  be accepted. Honest scope on that last point: only the `DEHOARD_HELD_OPEN_MIN_GB` strand actually
+  be accepted. Honest scope on that last point: only the `SCREE_HELD_OPEN_MIN_GB` strand actually
   fails against the unfixed code. The other two are defense-in-depth assertions, because (as
-  analysed above) `CACHE_MIN_MB` was subshell-contained and `DEHOARD_PM_TIMEOUT` is only reachable
+  analysed above) `CACHE_MIN_MB` was subshell-contained and `SCREE_PM_TIMEOUT` is only reachable
   under `--apply`; they would have passed before the fix. Every other new assertion in this release
   was individually verified to fail against the unfixed code.
 
@@ -255,7 +255,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow 
 - **Runs under zsh defaults regardless of your `~/.zshenv`.** `~/.zshenv` is sourced for every `zsh`
   invocation, so a global `setopt KSH_ARRAYS` or `SH_WORD_SPLIT` previously leaked in and could make
   `--json` emit invalid output (with exit 0) or silently skip a project whose path contains a space.
-  dehoard now calls `emulate zsh` at startup (then re-applies its one required option, `NULL_GLOB`),
+  scree now calls `emulate zsh` at startup (then re-applies its one required option, `NULL_GLOB`),
   so output and globbing are deterministic no matter how your shell is configured. No change to normal
   runs; the safe-root guard already prevented any wrong deletion in these cases.
 
@@ -309,7 +309,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow 
 ### Changed
 - The five governance docs (RULES, SAFETY, ARCHITECTURE, CONTRIBUTING, README) now list
   `--uninstall`/`--purge`'s `rm -rf` among the audited deletions that run outside `_rm`, framed as the
-  one sanctioned exception that removes dehoard's own fixed footprint rather than a user cleanup
+  one sanctioned exception that removes scree's own fixed footprint rather than a user cleanup
   candidate. The "new code must not add more" wording is reconciled accordingly: the rule bars new
   deleters of user cleanup paths outside `_rm`, and the listed exceptions are exhaustive.
 
@@ -323,27 +323,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow 
 ## [0.2.3]: 2026-06-04
 
 ### Added
-- **`--uninstall` and `--purge`: remove dehoard, following the `apt remove` vs `apt purge`
-  convention.** `--uninstall` removes the regenerable deletion logs (`~/.cache/dehoard/`) and, when
-  the running copy is the standard `~/.local/bin/dehoard` install, the script itself; it **keeps your
+- **`--uninstall` and `--purge`: remove scree, following the `apt remove` vs `apt purge`
+  convention.** `--uninstall` removes the regenerable deletion logs (`~/.cache/scree/`) and, when
+  the running copy is the standard `~/.local/bin/scree` install, the script itself; it **keeps your
   ignore list** and tells you where it is. `--purge` also removes the ignore list, printing its
   contents first so the one irreplaceable file is never lost silently. Both are preview-first (list
   exactly what they will remove and keep, then confirm); `--dry-run` shows the plan and deletes
   nothing, `--yes` skips the prompt. A copy run from a cloned repo, a custom path, or a symlink is
-  never deleted; dehoard prints the manual `rm` for it instead (a symlinked or relocated install could
+  never deleted; scree prints the manual `rm` for it instead (a symlinked or relocated install could
   otherwise point at a file you want to keep). Removal targets are fixed paths under `$HOME`, never
   user-derived.
 
 ### Changed
-- **The ignore list moved from `~/.cache/dehoard/ignore` to `~/.config/dehoard/ignore`** (honoring
+- **The ignore list moved from `~/.cache/scree/ignore` to `~/.config/scree/ignore`** (honoring
   `XDG_CONFIG_HOME`), because it is user-authored config, not regenerable cache. An existing file at
-  the old location is migrated automatically on the next run. Logs stay in `~/.cache/dehoard/`
+  the old location is migrated automatically on the next run. Logs stay in `~/.cache/scree/`
   (honoring `XDG_CACHE_HOME`). This is why `--uninstall` can clear the cache freely while preserving
   config by default.
 
 ### Notes
 - The complete on-disk footprint is documented in README "Footprint and uninstall": the script at
-  `~/.local/bin/dehoard`, logs at `~/.cache/dehoard/`, and the ignore list at `~/.config/dehoard/`.
+  `~/.local/bin/scree`, logs at `~/.cache/scree/`, and the ignore list at `~/.config/scree/`.
   92 assertions (was 83; added: ignore-list migration, `--uninstall` keeps config, `--purge` removes
   it after echoing, standard-install removal, non-standard/symlink-copy preservation, the XDG
   cache==config collision guard, dry-run/decline safety).
@@ -376,8 +376,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow 
   through `_rm` (NUL-safe, via process substitution so the freed-space tally is not lost to a
   subshell), so weight deletion is guarded, ignore-aware, and logged like everything else. This
   removes one entry from the short list of audited `_rm` exceptions.
-- **`DEHOARD_APPLY_DEFAULT` is now compared, not executed.** The opt-in was written
-  `${DEHOARD_APPLY_DEFAULT:-false} && APPLY=true`, which ran the variable's value as a command. It is
+- **`SCREE_APPLY_DEFAULT` is now compared, not executed.** The opt-in was written
+  `${SCREE_APPLY_DEFAULT:-false} && APPLY=true`, which ran the variable's value as a command. It is
   now a string comparison (`[[ ... == true ]]`), so a stray value can never execute. `=true` still
   enables apply; `--dry-run` still overrides.
 - **Backgrounded child is reaped on Ctrl-C in the timeout fallback.** When no `timeout`/`gtimeout`
@@ -396,19 +396,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow 
 
 ### Notes
 - Hardening only: no new flags, no behavior change on the normal path. 81 assertions (was 77; added
-  regression tests for the `DEHOARD_APPLY_DEFAULT` comparison and the LM Studio `_rm` routing,
+  regression tests for the `SCREE_APPLY_DEFAULT` comparison and the LM Studio `_rm` routing,
   including ignore-list coverage).
 
 ## [0.2.0]: 2026-06-03
 
 ### Added
 - **`--pick`: an interactive `fzf` picker per `--scan` category (biggest first).** Instead of a prompt
-  per item, dehoard collects all reclaimable candidates (Python venvs, conda/uv/Android/Rust toolchains,
+  per item, scree collects all reclaimable candidates (Python venvs, conda/uv/Android/Rust toolchains,
   `node_modules`, dist/build, `__pycache__`/egg-info/coverage, JVM heap dumps, ROS2 colcon artifacts,
   R session files, editor swap/backup, project logs, AI-tool caches, orphaned tool data, and the
   generic cache sweep) and opens **one picker per category**, biggest category first, prefaced by a
   **per-category summary** (count + size) as a contents page. In each: **TAB** marks, **Ctrl-A** all,
-  **Ctrl-D** none, Enter confirms, **Esc skips that category**. dehoard reprints the marked set and
+  **Ctrl-D** none, Enter confirms, **Esc skips that category**. scree reprints the marked set and
   asks once, then deletes just that category before moving on (so you can stop after the big ones).
   - **Typed deletion.** Env-managers are removed with their native uninstaller, not raw `rm`
     (`conda env remove`, `uv python uninstall`, `sdkmanager --uninstall`, `cargo clean`), so they
@@ -428,10 +428,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow 
   oldest-first and reporting the very first run.
 - **`--deep` system-cache cleanup** now guards the one `sudo rm` to a `/var/folders` root, so a
   mis-computed `$TMPDIR` can never hand an unexpected path to `sudo rm` (it's skipped with a note).
-- **"Storage freed" now reports what dehoard actually deleted**, not a whole-disk `df` delta. The old
-  figure was `free-space-after - free-space-before`, which credited dehoard for ambient disk activity
+- **"Storage freed" now reports what scree actually deleted**, not a whole-disk `df` delta. The old
+  figure was `free-space-after - free-space-before`, which credited scree for ambient disk activity
   during the run (it could show a non-zero "freed" even when nothing was deleted). It now sums the
-  size of each path dehoard removes, across every deletion path, the `_rm` primitive, the `--scan`
+  size of each path scree removes, across every deletion path, the `_rm` primitive, the `--scan`
   env-manager native uninstallers (conda/uv/Android/Rust, in both the per-entry and `--pick` flows),
   and `--models` (`ollama rm` via a store-size delta, LM Studio). Deleting nothing reports "Nothing
   deleted." The `df` value is kept only as separate "Free space now" context.
@@ -441,7 +441,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow 
   cheaply regenerable, so never auto-deleted / never in the picker), that duplicate detection is
   strictly **cross-tool** (two copies inside one tool are not flagged), and that `--models` removes
   **per tool**, not per model. Corrected docs that called `--models` "per-item". Fixed a
-  `CONTRIBUTING.md` line that wrongly listed model weights among regenerable data dehoard deletes.
+  `CONTRIBUTING.md` line that wrongly listed model weights among regenerable data scree deletes.
 
 Covered by the fixture-`$HOME` test suite (77 assertions), including the picker's abort-safety
 (empty/Esc deletes nothing even under `--apply --yes`), interactive-only behavior, typed deletion for
@@ -453,8 +453,8 @@ reports zero; a real delete reports the size actually removed).
 
 ### Fixed
 - **A hung package manager no longer freezes a run.** Each external package-manager cleanup
-  (brew/npm/pnpm/yarn/pip/uv/bun/trunk) now runs under a wall-clock timeout; if one blocks, dehoard
-  prints `skipped <tool>: timed out` and continues. The timeout is `DEHOARD_PM_TIMEOUT` seconds
+  (brew/npm/pnpm/yarn/pip/uv/bun/trunk) now runs under a wall-clock timeout; if one blocks, scree
+  prints `skipped <tool>: timed out` and continues. The timeout is `SCREE_PM_TIMEOUT` seconds
   (default 120, env-overridable). Found by real-machine testing, where a package-manager command
   blocked indefinitely.
 - **`_rm` no longer claims a deletion it did not make.** It now deletes each path first and prints
@@ -512,8 +512,8 @@ to touch your data.
 - **Never deletes your data**: model weights, outputs, session/chat history, source, git, configs
   are detected and kept.
 - **Ignore list**: opt-in "always skip" for paths you decline (`--list-ignored` / `--unignore` /
-  `--reset-ignore`); every skip is announced; disable entirely with `DEHOARD_IGNORE_ENABLED=false`.
-- **Deletion logging** to `~/.cache/dehoard/run-<timestamp>.log` under `--apply`; NULL_GLOB; SIGINT trap.
+  `--reset-ignore`); every skip is announced; disable entirely with `SCREE_IGNORE_ENABLED=false`.
+- **Deletion logging** to `~/.cache/scree/run-<timestamp>.log` under `--apply`; NULL_GLOB; SIGINT trap.
 - **Live deletion record**: under `--apply`, each removed path and its size is echoed as it happens
   (`removed: ~/… (size)`), so deletions are visible in real time, not just summarized.
 
@@ -527,7 +527,7 @@ to touch your data.
   TTY. Honors `NO_COLOR`; `CLICOLOR_FORCE=1` forces it on. `--help` is intentionally left plain.
 
 ### Configuration
-- Env vars: `DEHOARD_APPLY_DEFAULT`, `DEHOARD_IGNORE_ENABLED`, `CACHE_MIN_MB`, `NO_COLOR`,
+- Env vars: `SCREE_APPLY_DEFAULT`, `SCREE_IGNORE_ENABLED`, `CACHE_MIN_MB`, `NO_COLOR`,
   `CLICOLOR_FORCE`; `GIT_GC_ROOTS` / `EXTRA_SCAN_DIRS` in the USER CONFIG block.
 
 ### Documentation

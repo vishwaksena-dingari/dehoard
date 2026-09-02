@@ -2,9 +2,9 @@
 
 ## One zsh script, on purpose
 
-dehoard is a single `dehoard.sh` file. That is a deliberate choice, not laziness:
+scree is a single `scree.sh` file. That is a deliberate choice, not laziness:
 
-- **The install story depends on it.** `curl -fsSL …/dehoard.sh -o dehoard.sh && chmod +x` works
+- **The install story depends on it.** `curl -fsSL …/scree.sh -o scree.sh && chmod +x` works
   because there is exactly one file to fetch and audit. A reviewer can read the whole tool top to
   bottom before running it, important for something that deletes files.
 - **No runtime dependencies.** Pure zsh plus the standard macOS userland. No package to install, no
@@ -34,26 +34,26 @@ main() {
 main "$@"
 ```
 
-(That block is the actual dispatch from `dehoard.sh`, lightly trimmed of inline comments.)
+(That block is the actual dispatch from `scree.sh`, lightly trimmed of inline comments.)
 
 Each cleanup function self-guards on its flag, so the dispatch reads top-to-bottom in execution
 order. `--pick` is interactive-only, so `main()` skips the
 batch cleaners and runs only `run_scan`, whose candidates go into one `fzf` picker per category
 (biggest first) instead of the automatic Tier 1 sweep. The ~500-line `--help` text lives in a single `usage()` heredoc rather than hundreds of
-`echo` statements, so it never buries the logic. Every path dehoard removes itself still routes
+`echo` statements, so it never buries the logic. Every path scree removes itself still routes
 through the one `_rm` primitive (below); the function split changes organization, never the deletion
 contract. (The sole delegation is `--scan --pick` handing an environment to its native manager,
 conda/uv/sdkmanager/cargo, with an `_rm` fallback.)
 
 ## The tier model
 
-dehoard's behavior is organized into tiers and modes. Tier 1 always runs; everything else is opt-in
+scree's behavior is organized into tiers and modes. Tier 1 always runs; everything else is opt-in
 via a flag. The read-only modes (`--report`, `--json`) are a separate branch that never deletes, and
 `--pick` is interactive-only: it skips the batch tiers and runs only the scan picker.
 
 ```mermaid
 flowchart TD
-    Start([dehoard invoked]) --> RO{"--report / --json ?"}
+    Start([scree invoked]) --> RO{"--report / --json ?"}
     RO -- yes --> Audit[read-only audit / inventory<br/>deletes nothing] --> End([exit])
     RO -- no --> PK{"--pick ?"}
     PK -- yes --> Pick["scan picker only<br/>(interactive · skips Tier 1/2/models)"] --> Res
@@ -87,7 +87,7 @@ flowchart TD
   the per-item prompts when `fzf` is absent.
 
 The exact items in each tier are inventoried in [CLEANS.md](CLEANS.md), and the canonical source is
-`dehoard --help`, which explains every item and why it's safe.
+`scree --help`, which explains every item and why it's safe.
 
 ## How a deletion flows
 
@@ -102,7 +102,7 @@ an environment to its native uninstaller instead, which manages its own files an
 ## Design principles
 
 - **Preview-by-default.** Safe is the default; deletion is opt-in. (See [SAFETY.md](SAFETY.md).)
-- **Generic structural rules over hardcoded lists.** Where a pattern exists, dehoard matches on it
+- **Generic structural rules over hardcoded lists.** Where a pattern exists, scree matches on it
   instead of enumerating names, e.g. Python environments are detected by the presence of
   `pyvenv.cfg` (any folder name), and Electron app caches are matched by their canonical Chromium
   cache subfolder names rather than a fixed app list. This covers tools no rule names yet, and tools
@@ -112,7 +112,7 @@ an environment to its native uninstaller instead, which manages its own files an
 - **One central delete primitive.** Nearly all path removals go through `_rm` with its safe-root
   whitelist. A few audited, `--apply`-gated exceptions delete outside it: `--deep`'s root-owned
   system-cache `sudo rm`, `--models`' `ollama rm`, the `--scan --pick` env-manager native uninstallers
-  (with an `_rm` fallback), and `--uninstall`/`--purge` removing dehoard's own footprint (fixed
+  (with an `_rm` fallback), and `--uninstall`/`--purge` removing scree's own footprint (fixed
   `$HOME`-relative paths). New code must not add a deleter of user cleanup paths outside `_rm`; these
   are the exhaustive set.
 

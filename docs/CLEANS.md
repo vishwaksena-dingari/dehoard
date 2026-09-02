@@ -1,11 +1,11 @@
-# What dehoard cleans
+# What scree cleans
 
-> **Canonical source of truth:** run `dehoard --help` for the complete, current list with the
-> "why it's safe / how it comes back" rationale for **every** item, and `dehoard --report` to see
+> **Canonical source of truth:** run `scree --help` for the complete, current list with the
+> "why it's safe / how it comes back" rationale for **every** item, and `scree --report` to see
 > what's actually on *your* machine. This page is a human-readable map organized by mode; the tool
 > itself is authoritative, so when in doubt, trust `--help`.
 
-Everything below is **regenerable**: caches, build outputs, and re-downloadable assets. dehoard
+Everything below is **regenerable**: caches, build outputs, and re-downloadable assets. scree
 detects and **keeps** your real data (model weights, generated outputs, chat/session history, source,
 git, configs). Nothing here is deleted without `--apply`.
 
@@ -27,11 +27,11 @@ Zero-consequence, regenerable junk:
 
 ## `--report` only: named, never deleted
 
-These are surfaced with their size so you can decide. dehoard never removes them under any flag.
+These are surfaced with their size so you can decide. scree never removes them under any flag.
 
 - **VM / container disk images under Application Support** (`.img`, `.img.zst`, `.raw`, `.qcow2`,
   `.vmdk`, `.vdi` over 500 MB): **reported only, never deleted**. The extension reliably says a file
-  is a runtime substrate, but nothing on disk says whether *this* one is disposable, so dehoard
+  is a runtime substrate, but nothing on disk says whether *this* one is disposable, so scree
   prints the size and stops. This is app-agnostic and covers tools no rule lists — Claude Desktop's
   `claudevm.bundle` alone can hold ~21 GB. Sizes come from `du`, not `ls`: these files are sparse
   (Docker's image reads 1.0 TB apparent vs 8.4 GB real). Scanned at depth 4, which costs ~0.4s;
@@ -51,7 +51,7 @@ These are surfaced with their size so you can decide. dehoard never removes them
 - **Unavailable iOS simulator devices** + CoreSimulator caches. Simulator *runtimes* are NOT
   removed — they are the large ones (tens of GB, and Xcode silently reinstalls them on update),
   but `simctl runtime delete all` cannot be scoped to unused runtimes or previewed per-item, so
-  dehoard reports and leaves them. Clear them yourself with `xcrun simctl runtime delete all`.
+  scree reports and leaves them. Clear them yourself with `xcrun simctl runtime delete all`.
 - **VS Code, Cursor, and Discord caches** in Application Support (specific cache subfolders only;
   `User/` settings and storage are kept). *(The generic, app-agnostic Electron cache sweep lives
   in `--scan`, below.)*
@@ -85,7 +85,7 @@ Per-entry prompts for environments; batch prompts for clearly-safe artifacts:
 - **LaTeX compilation artifacts**: `.aux`, `.toc`, `.lot`, `.lof`, `.bbl`, `.blg`, `.nav`, `.snm`,
   `.fls`, `.fdb_latexmk`, `.synctex.gz`. Safe, regenerated on the next compile; your `.tex` is untouched.
 - **R session artifacts**: `.RData`, `.Rhistory`, `.Rapp.history`, `Rplots.pdf`. ⚠️ `.RData` can hold
-  work you care about; dehoard lists files before asking, review before confirming.
+  work you care about; scree lists files before asking, review before confirming.
 - **IPython command history**: `~/.ipython/profile_default/history.sqlite`. ⚠️ This is your personal
   command history, not a cache; deletion is permanent. Surfaced only so you can decide consciously.
 - **AI/local-model tool caches**: regenerable temp/cache only; models, outputs, and session history
@@ -106,7 +106,7 @@ Per-entry prompts for environments; batch prompts for clearly-safe artifacts:
   including ones that don't exist yet.
 
 > ⚠️ A few `--scan` items can hold things you care about (e.g. `.RData`, IPython history, a `dist/`
-> some projects commit). dehoard lists them before asking and flags them with a warning, review the
+> some projects commit). scree lists them before asking and flags them with a warning, review the
 > list before confirming.
 
 ### `--scan --pick`: one picker per category
@@ -116,7 +116,7 @@ replaced by an `fzf` picker **per category**, opened one at a time, **biggest ca
 per-category summary (count + size) prints first as a contents page. In each category's picker: TAB
 marks items, Ctrl-A all / Ctrl-D none, Enter confirms, and **Esc skips that whole category**; the
 preview pane shows the recreate hint and any caveat (so the `.RData` / `dist/` warning above travels
-with the item). After you mark a category, dehoard reprints the marked set and asks once, then deletes
+with the item). After you mark a category, scree reprints the marked set and asks once, then deletes
 just that category before moving to the next, so each category is a self-contained unit (Ctrl-C after
 the big ones keeps what you already cleared). It is interactive-only, so it does **not** run the Tier 1
 sweep; an empty selection or Esc deletes nothing; environment managers (conda/uv/Android/Rust) are
