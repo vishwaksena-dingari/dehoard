@@ -5,7 +5,7 @@ LAUNCH.md
 temp.txt
 cleanup.sh
 
-# local logs dehoard writes when --apply is used
+# local logs scree writes when --apply is used
 .cache/
 *.log
 # macOS

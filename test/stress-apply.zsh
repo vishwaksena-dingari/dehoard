@@ -12,9 +12,19 @@ bad(){ print -P "  %F{red}✗%f $1"; (( F++ )); return 0; }
 # Clean up on ANY exit, not just the happy path. Without this an interrupted or failed run leaks
 # its fixture directory and leaves the background file-holder process alive -
 # thirteen orphaned fixtures were found on this machine after a session of interrupted runs.
+# Stub the tools that reach OUTSIDE the fixture. osascript is the one that matters: scree posts a
+# desktop notification whenever it frees anything, and with the real PATH these tests fired a
+# genuine macOS notification on every run - the user watched "scree: Freed 16 KB" pop up repeatedly
+# while the suite ran. A test must not be observable outside its fixture. pip/gem are stubbed for
+# the same reason the main suite stubs them: they mutate the developer's real Python and Ruby state.
+_STUBS=$(mktemp -d)
+for _t in osascript pip pip3 gem; do
+  print -r -- $'#!/bin/sh\nexit 0' > "$_STUBS/$_t"; chmod +x "$_STUBS/$_t"
+done
+_TESTPATH="$_STUBS:/usr/bin:/bin:/usr/sbin:/sbin"
 FIX=$(mktemp -d)
-trap 'rm -rf "$FIX" 2>/dev/null; [[ -n "$HOLDER" ]] && kill -9 "$HOLDER" 2>/dev/null; exit 130' INT TERM
-trap 'rm -rf "$FIX" 2>/dev/null; [[ -n "$HOLDER" ]] && kill -9 "$HOLDER" 2>/dev/null;' EXIT; export TMPDIR="$FIX/tmp/"; mkdir -p "$FIX/tmp"
+trap 'rm -rf "$FIX" "$_STUBS" 2>/dev/null; [[ -n "$HOLDER" ]] && kill -9 "$HOLDER" 2>/dev/null; exit 130' INT TERM
+trap 'rm -rf "$FIX" "$_STUBS" 2>/dev/null; [[ -n "$HOLDER" ]] && kill -9 "$HOLDER" 2>/dev/null;' EXIT; export TMPDIR="$FIX/tmp/"; mkdir -p "$FIX/tmp"
 
 # --- things that SHOULD be removed -------------------------------------------------
 mkdir -p "$FIX/.npm/_npx" "$FIX/.cache/node" "$FIX/Library/Caches/node-gyp"
@@ -41,7 +51,7 @@ zsh -c 'exec 9< "'"$FIX"'/.npm/_npx/a/b/c/d/live/Cache.db"; sleep 60' & HOLDER=$
 sleep 1
 
 before=$(find "$FIX" -type f | wc -l | tr -d ' ')
-HOME="$FIX" PATH="/usr/bin:/bin:/usr/sbin:/sbin" zsh "$SCRIPT" --apply --yes > "$FIX/run.out" 2>&1
+HOME="$FIX" PATH="$_TESTPATH" zsh "$SCRIPT" --apply --yes > "$FIX/run.out" 2>&1
 rc=$?
 
 # --- assertions --------------------------------------------------------------------

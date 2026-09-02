@@ -682,6 +682,18 @@ _el=$(( SECONDS - _t0 ))
   || bad "--report hung for ${_el}s - an unbounded sizing call remains"
 rm -rf "$FIX" "$STUBD"
 
+# No test may reach outside its fixture and touch the developer's desktop. The stress tests ran
+# --apply with the real PATH, so /usr/bin/osascript was live and every run posted a genuine macOS
+# notification - "scree: Freed 16 KB" appearing on screen while the suite ran. Observable side
+# effects outside the fixture are a test bug, not a cosmetic one.
+for _st in "${0:A:h}/stress-apply.zsh" "${0:A:h}/stress-scan.zsh"; do
+  if grep -q 'osascript' "$_st" 2>/dev/null; then
+    ok "${_st:t} stubs osascript (no real desktop notifications)"
+  else
+    bad "${_st:t} does NOT stub osascript - it will post real notifications"
+  fi
+done
+
 # Arithmetic-injection guard. zsh evaluates a variable's VALUE inside $(( )) recursively, and
 # arithmetic supports assignment — so a numeric env var set to `(DRY_RUN=0)` clobbers the flag
 # _rm branches on and silently turns a PREVIEW run into a real deletion. Regression: the victim
