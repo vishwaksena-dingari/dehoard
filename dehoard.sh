@@ -1262,11 +1262,8 @@ _rm() {
       # B7: a failed or timed-out measurement must read as UNKNOWN, never as 0. Logging a multi-GB
       # delete as "0KB" makes the run log lie about the one thing it exists to record.
       [[ "$_szk" == <-> ]] || _szk=""
-      if [[ -z "$_szk" ]]; then
-        _sz="unknown"; _szk=0
-      elif (( _szk >= 1048576 )); then _sz="$(( _szk / 1048576 ))G"
-      elif (( _szk >= 1024 ));     then _sz="$(( _szk / 1024 ))M"
-      else                              _sz="${_szk}K"
+      if [[ -z "$_szk" ]]; then _sz="unknown"; _szk=0
+      else                      _sz=$(_hkb "$_szk")
       fi
       # Delete FIRST, report only on success: never print "removed:" for something that did not
       # actually go. rm's own errors are routed to the deletion log, not the terminal, so a
@@ -1604,6 +1601,8 @@ _run_picker() {
 # cleared, so no later success can mask the interrupt.
 _CANCELLED=false
 _is_cancelled() { [[ "$_CANCELLED" == true ]]; }
+
+
 
 # Skip-branch tracing. Preview output prints only POSITIVES - what would be deleted - and is
 # structurally silent about what was skipped: a glob that matched nothing, a tool that was absent, a
@@ -1949,26 +1948,74 @@ if $REPORT; then
   # folders named like a bundle id with no matching app. Report-only & count-only:
   # dehoard stays dev/ML-scoped; removing general app leftovers is out of scope (a job for a
   # dedicated app uninstaller).
-  typeset -A _inst_bid
-  for _app in /Applications/*.app(N) ~/Applications/*.app(N) /System/Applications/*.app(N); do
-    _bid=$(defaults read "$_app/Contents/Info" CFBundleIdentifier 2>/dev/null) || continue
-    [[ -n "$_bid" ]] && _inst_bid[${_bid:l}]=1
-  done
-  _orphan_cache_kb=0 _orphan_cache_n=0
+  # Collect the CANDIDATE cache dirs FIRST, and only pay for app enumeration if there are any.
+  # `defaults read` forks per app - ~57 apps here - and doing that unconditionally made --report
+  # 13x slower (2.8s -> 37.8s) even on a fixture with no caches at all. The suite calls --report
+  # repeatedly, so that cost multiplied across the whole run.
+  typeset -a _cand=()
   for _c in ~/Library/Caches/*(N/); do
     _name="${_c:t}"
-    [[ "$_name" == *.*.* ]] || continue                       # looks like a bundle id (a.b.c)
-    [[ "${_name:l}" == com.apple.* ]] && continue             # macOS system caches, not a removed app
+    [[ "$_name" == *.*.* ]] || continue
+    [[ "${_name:l}" == com.apple.* ]] && continue
+    case "${_name:l}" in *updater*|*helper*|*agent*|*xpc*|*service*|*daemon*|*crashpad*) continue ;; esac
+    [[ -n "$(find "$_c" -maxdepth 0 -mtime +30 -print 2>/dev/null)" ]] || continue
+    _cand+=("$_c")
+  done
+
+  # Cache the app -> bundle-id map. `defaults read` forks once per app and parses a plist; across
+  # ~57 apps that measured ~66s, which is absurd for a read-only section that finds nothing on a
+  # tidy machine. The set of installed apps changes rarely, so a short-lived cache is safe and
+  # turns the second and later runs into a single file read.
+  typeset -A _inst_bid
+  if (( ${#_cand[@]} )); then
+    local _bidcache="${XDG_CACHE_HOME:-$HOME/.cache}/dehoard/installed-bundle-ids"
+    local -a _fresh=("$_bidcache"(Nmm-60))          # regenerate if older than 60 minutes
+    if (( ${#_fresh[@]} )); then
+      while IFS= read -r _bid; do [[ -n "$_bid" ]] && _inst_bid[$_bid]=1; done < "$_bidcache"
+      _dbg "bundle-id cache hit (${#_inst_bid} apps)"
+    else
+      for _app in /Applications/*.app(N) ~/Applications/*.app(N) /System/Applications/*.app(N); do
+        _bid=$(defaults read "$_app/Contents/Info" CFBundleIdentifier 2>/dev/null) || continue
+        [[ -n "$_bid" ]] && _inst_bid[${_bid:l}]=1
+      done
+      mkdir -p "${_bidcache:h}" 2>/dev/null && print -rl -- ${(k)_inst_bid} > "$_bidcache" 2>/dev/null
+      _dbg "bundle-id cache rebuilt (${#_inst_bid} apps)"
+    fi
+  fi
+  # FAIL CLOSED. Fewer than 10 resolvable apps means the scan failed, not that the user owns nine.
+  # Without this, a broken scan makes every installed app look uninstalled and the whole section
+  # becomes a list of LIVE caches described as orphans.
+  if (( ${#_inst_bid} < 10 )); then
+    _dbg "orphan scan: only ${#_inst_bid} apps resolved, skipping the section"
+    _orphan_cache_n=0
+  else
+  _orphan_cache_kb=0 _orphan_cache_n=0
+  _orphan_names=()
+  for _c in $_cand; do
+    _name="${_c:t}"
     [[ -n "${_inst_bid[${_name:l}]}" ]] && continue           # app still installed → not orphaned
+    # A vendor with ANY app installed is presumed live, covering same-namespace helpers.
+    _vendor="${(j:.:)${(s:.:)${_name:l}}[1,2]}"
+    _skip=false
+    for _i in ${(k)_inst_bid}; do [[ "$_i" == "$_vendor".* ]] && { _skip=true; break }; done
+    $_skip && continue
     _ckb=$(du -sk "$_c" 2>/dev/null | cut -f1); (( _ckb >= 10240 )) || continue   # ignore <10MB noise
+    _orphan_names+=("$_ckb|$_name")
     (( _orphan_cache_kb += _ckb, _orphan_cache_n++ ))
   done
+  fi
   if (( _orphan_cache_n > 0 )); then
     echo ""
     echo "$(c_head "── Orphaned app caches (app no longer installed) ──")"
     printf "  %d cache folder(s), ~%s total in ~/Library/Caches with no matching app.\n" \
       "$_orphan_cache_n" "$(_hkb $_orphan_cache_kb)"
+    # Name them. A bare count tells you a number but not what to act on, and the user cannot verify
+    # a count. Largest first.
+    for _o in ${(On)_orphan_names}; do
+      printf "    %8s  %s\n" "$(_hkb ${_o%%|*})" "${_o#*|}"
+    done
     echo "  Read-only, dehoard stays dev/ML-scoped; general app leftovers are a job for a dedicated app uninstaller."
+    echo "  Bundle-id to app mapping is imperfect - verify the app is really gone before removing one."
   fi
 
   # Ignore list summary
