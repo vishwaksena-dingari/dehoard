@@ -389,7 +389,7 @@ rm -rf "$FIX"
 # Every function _rm calls, in definition order. _rm has gained dependencies three times and each
 # time an inline extraction elsewhere silently omitted the new one, making the guard undefined and
 # the test fail as though the CODE were broken. One list, one place to update.
-_RM_DEPS=(_is_cancelled _run_timeout _load_open_files _db_family_in_use _holds_live_db _mv_to_trash _rm)
+_RM_DEPS=(_is_cancelled _hkb _run_timeout _load_open_files _db_family_in_use _holds_live_db _mv_to_trash _rm)
 _rm_deps_src() { local f; for f in $_RM_DEPS; do sed -n "/^$f() {/,/^}/p" "$SCRIPT"; done }
 
 _rm_iso() {   # $1 = fixture HOME, $2 = path; echoes _rm's output
@@ -591,6 +591,25 @@ _el=$(( SECONDS - _t0 ))
   && ok "a hung directory-size probe cannot stall the run (${_el}s, bounded)" \
   || bad "hung du stalled the run for ${_el}s - DEHOARD_SIZE_TIMEOUT not applied"
 rm -rf "$FIX" "$STUBD"
+
+# Multi-path _rm must name EACH file in its own "removed:" line. The resolved path was computed in
+# the validation loop, which runs to completion before the deletion loop starts, so every line
+# reported the LAST target regardless of what was deleted - a run log that names the wrong file is
+# worse than one that names none. Sizes were correct throughout, which is what made it visible.
+FIX=$(mktemp -d); mkdir -p "$FIX/.npm/_npx"
+for _i in 1 2 3; do dd if=/dev/zero of="$FIX/.npm/_npx/f$_i" bs=1024 count=$(( _i * 1000 )) 2>/dev/null; done
+_out=$(HOME="$FIX" PATH="$SAFE_PATH" zsh -c '
+  DRY_RUN=false; TRASH_MODE=false; LOGFILE=""; _FREED_KB=0; _TRASHED_KB=0; _CANCELLED=false
+  _OPEN_FILES_SNAPSHOT_FILE=""; _OPEN_FILES_LOADED=false
+  c_warn(){ printf "%s" "$*"; }; c_dim(){ printf "%s" "$*"; }
+  '"$(_rm_deps_src)"'
+  _rm "$1" "$2" "$3" 2>&1' _ "$FIX/.npm/_npx/f1" "$FIX/.npm/_npx/f2" "$FIX/.npm/_npx/f3")
+if [[ "$_out" == *"f1 ("* && "$_out" == *"f2 ("* && "$_out" == *"f3 ("* ]]; then
+  ok "multi-path _rm names each deleted file in its own log line"
+else
+  bad "multi-path _rm logged the wrong path(s): $(print -r -- "$_out" | grep -c removed) lines, distinct=$(print -r -- "$_out" | grep -oE 'f[0-9]' | sort -u | wc -l | tr -d ' ')"
+fi
+rm -rf "$FIX"
 
 # Arithmetic-injection guard. zsh evaluates a variable's VALUE inside $(( )) recursively, and
 # arithmetic supports assignment — so a numeric env var set to `(DRY_RUN=0)` clobbers the flag
