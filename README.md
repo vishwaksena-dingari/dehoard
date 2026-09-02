@@ -125,7 +125,7 @@ still passes the safe-root guard; environment managers (conda/uv/Android/Rust) u
 
 | Command | What it does |
 |---|---|
-| `dehoard --report` | Read-only audit: biggest dirs, reclaimable caches, model inventory, cross-tool duplicates. Deletes nothing. |
+| `dehoard --report` | Read-only audit: biggest dirs, reclaimable caches, model inventory, cross-tool duplicates, held-open deleted files, VM disk images, caches of apps that are no longer installed, login items pointing at software that is gone, and Autodesk webdeploy. Deletes nothing — several of these sections are report-only by design, because the safe deletion rule is either unknowable (bundle-id to app mapping is imperfect) or untestable here. |
 | `dehoard` | Preview the always-safe (Tier 1) cleanup. Deletes nothing. |
 | `dehoard --apply` | Reclaim the Tier 1 safe stuff. |
 | `dehoard --deep` | Add Tier 2: aggressive caches (Library caches, Xcode DerivedData, Docker prune, git gc). Pair with `--apply`. Like Tier 1 it runs as a batch with no per-item prompt (just the preview/apply gate), so preview it first. |
@@ -314,6 +314,9 @@ Set via environment variables, for example in `~/.zshrc`:
 | `DEHOARD_PM_TIMEOUT` | `120` | Seconds before a single external package-manager cleanup (brew/npm/yarn/trunk/…) is timed out and skipped, so one hung tool can't freeze the run. |
 | `DEHOARD_HELD_OPEN_MIN_GB` | `5` | Per-process floor before dehoard reports a process holding deleted-but-open files. Raise it if your machine legitimately holds more (Docker, a local database, a long-lived browser). |
 | `DEHOARD_VM_IMAGE_MIN_MB` | `500` | Minimum size (MB) for a VM/container disk image to be listed in `--report`. Report-only; these are never deleted. Exposed mainly so the code path is reachable in tests. |
+| `DEHOARD_SIZE_TIMEOUT` | `20` | Seconds any single directory-size measurement may take before it is abandoned. The deletion still proceeds; only the reported figure is lost, shown as `unknown`. Stops one stalled tree (a dead network mount, a runaway cache) from holding the whole run. |
+| `DEHOARD_XCODE_DEVICESUPPORT_KEEP` | `2` | How many iOS/watchOS/tvOS device-support versions to keep. Each is 1-3 GB of debug symbols, re-copied off the device on next connect. Ordered by mtime, not version string. |
+| `DEHOARD_DEBUG` | unset | Set to any value to trace skipped paths on stderr: globs that matched nothing, guards that fired, ignore-list hits. Preview output only shows what *would* be deleted, so it cannot answer "why didn't it take X?". |
 | `NO_COLOR` | unset | Set to any value to disable terminal color ([no-color.org](https://no-color.org)). Color is also off when stdout isn't a TTY (e.g. piped), and never appears in `--json` or the deletion log. |
 | `CLICOLOR_FORCE` | unset | Set to `1` to force color even when stdout isn't a TTY. `--json` stays pure JSON regardless. |
 

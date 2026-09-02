@@ -156,6 +156,8 @@ ENVIRONMENT
     DEHOARD_HELD_OPEN_MIN_GB    5      per-process floor (GB) for the held-open-files warning
     DEHOARD_VM_IMAGE_MIN_MB     500    minimum size (MB) for a VM/container disk image to be listed
     DEHOARD_SIZE_TIMEOUT        20     seconds before one directory-size probe is abandoned
+    DEHOARD_XCODE_DEVICESUPPORT_KEEP 2  iOS device-support versions to keep (1-3 GB each)
+    DEHOARD_DEBUG               unset  set to any value to trace skipped paths on stderr
     DEHOARD_SIZE_TIMEOUT        20     seconds before one directory-size probe is abandoned
     NO_COLOR / CLICOLOR_FORCE   unset  disable / force terminal color
     XDG_CACHE_HOME              ~/.cache   holds run logs + --snapshot archives
