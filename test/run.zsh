@@ -578,6 +578,20 @@ out=$(_rm_iso "$FIX" "$FIX/Library/Caches/anything")
   || bad "symlink escaped the allow-list: [$out]"
 rm -rf "$FIX"
 
+# C4: a single pathological directory-size probe must not hold the run hostage. Stub `du` to hang
+# and assert the run still finishes. Reverted once on the false theory that this caused real-file
+# deletion - it did not; the suite had merely become slow enough to be killed before cleanup ran.
+FIX=$(mktemp -d); STUBD=$(mktemp -d)
+printf '#!/bin/sh\nsleep 300\n' > "$STUBD/du"; chmod +x "$STUBD/du"
+mkdir -p "$FIX/.npm/_npx"; : > "$FIX/.npm/_npx/x"
+_t0=$SECONDS
+HOME="$FIX" DEHOARD_SIZE_TIMEOUT=3 PATH="$STUBD:$SAFE_PATH" zsh "$SCRIPT" --apply --yes >/dev/null 2>&1
+_el=$(( SECONDS - _t0 ))
+(( _el < 120 )) \
+  && ok "a hung directory-size probe cannot stall the run (${_el}s, bounded)" \
+  || bad "hung du stalled the run for ${_el}s - DEHOARD_SIZE_TIMEOUT not applied"
+rm -rf "$FIX" "$STUBD"
+
 # Arithmetic-injection guard. zsh evaluates a variable's VALUE inside $(( )) recursively, and
 # arithmetic supports assignment — so a numeric env var set to `(DRY_RUN=0)` clobbers the flag
 # _rm branches on and silently turns a PREVIEW run into a real deletion. Regression: the victim

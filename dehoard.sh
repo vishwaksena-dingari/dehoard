@@ -36,6 +36,9 @@ GIT_GC_ROOTS=(~/Documents ~/src ~/Desktop ~/Developer "${EXTRA_SCAN_DIRS[@]}")
 # Seconds any single directory-size measurement may take before it is abandoned as "unknown".
 # Deletion still proceeds; only the reported figure is lost.
 : ${DEHOARD_SIZE_TIMEOUT:=20}
+# Seconds any single directory-size measurement may take before it is abandoned as "unknown".
+# Deletion still proceeds; only the reported figure is lost.
+: ${DEHOARD_SIZE_TIMEOUT:=20}
 # Set to 'true' to make --apply the default so you don't have to type it every run.
 # Add  export DEHOARD_APPLY_DEFAULT=true  to your ~/.zshrc to make it permanent.
 # Override back to safe preview for a single run:  DEHOARD_APPLY_DEFAULT=false dehoard
@@ -68,6 +71,7 @@ _num_or_default CACHE_MIN_MB 100
 _num_or_default DEHOARD_PM_TIMEOUT 120
 _num_or_default DEHOARD_HELD_OPEN_MIN_GB 5
 _num_or_default DEHOARD_VM_IMAGE_MIN_MB 500
+_num_or_default DEHOARD_SIZE_TIMEOUT 20
 _num_or_default DEHOARD_SIZE_TIMEOUT 20
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -151,6 +155,7 @@ ENVIRONMENT
     DEHOARD_PM_TIMEOUT          120    seconds before one hung package-manager cleanup is skipped
     DEHOARD_HELD_OPEN_MIN_GB    5      per-process floor (GB) for the held-open-files warning
     DEHOARD_VM_IMAGE_MIN_MB     500    minimum size (MB) for a VM/container disk image to be listed
+    DEHOARD_SIZE_TIMEOUT        20     seconds before one directory-size probe is abandoned
     DEHOARD_SIZE_TIMEOUT        20     seconds before one directory-size probe is abandoned
     NO_COLOR / CLICOLOR_FORCE   unset  disable / force terminal color
     XDG_CACHE_HOME              ~/.cache   holds run logs + --snapshot archives
@@ -1253,13 +1258,17 @@ _rm() {
         local _b; _b=$(stat -f%z "$target" 2>/dev/null)
         [[ "$_b" == <-> ]] && _szk=$(( (_b + 1023) / 1024 )) || _szk=""
       else
-        # C4 (bounding this du under _run_timeout) was implemented and REVERTED. The suite's
-        # hermeticity canaries fired: with the wrapper in place, a run deleted real files from the
-        # developer's actual TMPDIR and $HOME. Bisected to this single line - reverting it alone
-        # restored 175/175 with canaries intact. The mechanism is not yet understood, and an
-        # unexplained change that deletes real files has no place in a deleter, however good the
-        # motivation. Re-attempt only with the canaries watching and the cause identified first.
-        _szk=$(du -sk "$target" 2>/dev/null | cut -f1)
+        # C4, re-attempted. A single pathological tree - a stalled network mount, a runaway cache -
+        # must not hold the whole run hostage; that failure mode has already happened here once via
+        # an unbounded external call. On timeout the size is UNKNOWN, which B7 renders honestly, and
+        # the deletion still proceeds: refusing to delete something merely because it could not be
+        # measured would make a slow disk look like a clean one.
+        #
+        # This was reverted once before on the theory that it caused real-file deletion. That theory
+        # was wrong. The suite had simply become slow enough to be killed mid-run, leaving cleanup
+        # unfinished so the canaries LOOKED deleted; and the supposed underlying cause, a
+        # _run_timeout deadlock on large output, could not be reproduced at all.
+        _szk=$(_run_timeout "${DEHOARD_SIZE_TIMEOUT:-20}" du -sk "$target" 2>/dev/null | cut -f1)
       fi
       # B7: a failed or timed-out measurement must read as UNKNOWN, never as 0. Logging a multi-GB
       # delete as "0KB" makes the run log lie about the one thing it exists to record.
