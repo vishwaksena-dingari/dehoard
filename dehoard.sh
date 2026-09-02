@@ -1741,7 +1741,7 @@ if $REPORT; then
   # does not have Autodesk on it, which this one does not. Reporting the total is useful and safe;
   # guessing at deletion rules for a 60 GB tree, untested, is not.
   if [[ -d ~/Library/Application\ Support/Autodesk/webdeploy/production ]]; then
-    _ad_kb=$(_run_timeout "${DEHOARD_SIZE_TIMEOUT:-20}" du -sk ~/Library/Application\ Support/Autodesk/webdeploy/production 2>/dev/null | cut -f1)
+    local _ad_kb; _ad_kb=$(_run_timeout "${DEHOARD_SIZE_TIMEOUT:-20}" du -sk ~/Library/Application\ Support/Autodesk/webdeploy/production 2>/dev/null | cut -f1)
     if [[ "$_ad_kb" == <-> ]] && (( _ad_kb > 512000 )); then
       echo ""
       echo "$(c_head "── Autodesk webdeploy ──")"
@@ -1794,7 +1794,7 @@ if $REPORT; then
   _art=($(find ~ -maxdepth 4 \( -name node_modules -o -name target -o -name .venv \) -type d \
             -not -path "*/node_modules/*" -not -path "*/.venv/*" -print 2>/dev/null | head -40))
   if (( ${#_art[@]} )); then
-    local _asum=0 _asampled=0 _akb _adl=$(( SECONDS + 6 ))
+    local _asum=0 _asampled=0 _akb _plus _adl=$(( SECONDS + 6 ))
     local _a
     for _a in $_art; do
       (( SECONDS >= _adl )) && break
@@ -1804,7 +1804,7 @@ if $REPORT; then
       (( _asum += _akb, _asampled++ ))
     done
     if (( _asum > 102400 )); then                       # only speak up above ~100 MB
-      local _plus=""; (( _asampled < ${#_art[@]} )) && _plus="+"
+      _plus=""; (( _asampled < ${#_art[@]} )) && _plus="+"
       echo ""
       echo "$(c_head "── Project build artifacts ──")"
       printf "  %8s  %d director%s found, %d sampled\n" \
@@ -2120,8 +2120,8 @@ if $REPORT; then
     _dbg "orphan scan: only ${#_inst_bid} apps resolved, skipping the section"
     _orphan_cache_n=0
   else
+  local -a _orphan_names=(); local _o _vendor _skip _i
   _orphan_cache_kb=0 _orphan_cache_n=0
-  _orphan_names=()
   for _c in $_cand; do
     _name="${_c:t}"
     [[ -n "${_inst_bid[${_name:l}]}" ]] && continue           # app still installed → not orphaned
