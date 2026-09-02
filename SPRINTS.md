@@ -68,3 +68,23 @@ S5.1  INCONCLUSIVE this round, and the reason matters more than the number.
 S5.2  docs sync: README, SAFETY, CHANGELOG, --help
 S5.3  multi-lens review over the whole diff since v0.2.8
 S5.4  tag v0.2.9
+
+## Post-v0.2.10: an attempted optimisation that was measured and reverted
+
+--report at ~150s is bounded but still slow, and the cost is `du -h -d 2 ~`. Profiling the home
+tree showed `du -sk ~/Library` alone runs past ten minutes, almost entirely
+~/Library/Containers and ~/Library/Group Containers - thousands of tiny per-app sandbox files, one
+bundle alone holding 2843. Those are also the least useful thing the section can show, since
+dehoard never cleans them: they are app data, not cache.
+
+Skipping them looked like the rare optimisation that costs nothing. It was not.
+
+Rewriting the scan to walk ~'s children individually and skip the container trees measured 437s,
+against a 175s baseline. A real bug in the rewrite - it walked ~/Library in the child loop AND
+walked Library's children again - accounted for some of it; fixing that brought it to 344s. Still
+worse. Two clean runs of the ORIGINAL then measured 158s and 139s, so the gap is not cache warmth:
+one `du` traversing the tree once and reporting at every level genuinely beats N invocations each
+re-walking a child.
+
+Reverted. The simple bounded version ships. A change that adds a loop, a skip list and a nested
+second pass has to earn it with a measurement, and this one measured worse.
