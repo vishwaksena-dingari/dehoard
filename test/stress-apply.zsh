@@ -9,7 +9,12 @@ P=0; F=0
 ok(){ print -P "  %F{green}✓%f $1"; (( P++ )); return 0; }
 bad(){ print -P "  %F{red}✗%f $1"; (( F++ )); return 0; }
 
-FIX=$(mktemp -d); export TMPDIR="$FIX/tmp/"; mkdir -p "$FIX/tmp"
+# Clean up on ANY exit, not just the happy path. Without this an interrupted or failed run leaks
+# its fixture directory and leaves the background file-holder process alive -
+# thirteen orphaned fixtures were found on this machine after a session of interrupted runs.
+FIX=$(mktemp -d)
+trap 'rm -rf "$FIX" 2>/dev/null; [[ -n "$HOLDER" ]] && kill -9 "$HOLDER" 2>/dev/null; exit 130' INT TERM
+trap 'rm -rf "$FIX" 2>/dev/null; [[ -n "$HOLDER" ]] && kill -9 "$HOLDER" 2>/dev/null;' EXIT; export TMPDIR="$FIX/tmp/"; mkdir -p "$FIX/tmp"
 
 # --- things that SHOULD be removed -------------------------------------------------
 mkdir -p "$FIX/.npm/_npx" "$FIX/.cache/node" "$FIX/Library/Caches/node-gyp"

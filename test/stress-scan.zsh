@@ -7,7 +7,12 @@ SCRIPT="${1:?script path}"
 P=0; F=0
 ok(){ print -P "  %F{green}✓%f $1"; (( P++ )); return 0 }
 bad(){ print -P "  %F{red}✗%f $1"; (( F++ )); return 0 }
-FIX=$(mktemp -d); export TMPDIR="$FIX/tmp/"; mkdir -p "$FIX/tmp"
+# Clean up on ANY exit, not just the happy path. Without this an interrupted or failed run leaks
+# its fixture directory -
+# thirteen orphaned fixtures were found on this machine after a session of interrupted runs.
+FIX=$(mktemp -d)
+trap 'rm -rf "$FIX" 2>/dev/null; exit 130' INT TERM
+trap 'rm -rf "$FIX" 2>/dev/null;' EXIT; export TMPDIR="$FIX/tmp/"; mkdir -p "$FIX/tmp"
 
 # A realistic project: real source beside regenerable artifacts.
 mkdir -p "$FIX/proj/src" "$FIX/proj/node_modules/pkg" "$FIX/proj/.venv/lib" "$FIX/proj/__pycache__"
