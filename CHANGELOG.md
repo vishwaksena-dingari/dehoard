@@ -3,6 +3,48 @@
 All notable changes to `dehoard` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [0.2.9]: 2026-09-02
+
+### Fixed
+- **The run log named the wrong file.** `_rm`'s "removed:" line used a path resolved in the
+  validation loop, which completes over every target *before* deletion begins — so it held the last
+  target's value and every line reported that same file regardless of what was deleted. Deleting
+  three files logged the third one three times. The run log is the only record of an irreversible
+  act; being confidently wrong in it is worse than being silent. Shipped in 0.2.8.
+- **`_hkb` was defined inside `run_report`.** Callers outside it — including `_rm`'s deletion line —
+  silently received an empty string, as did callers earlier in `run_report` than the definition,
+  because a nested function does not exist until its definition executes. A blank appeared where a
+  size belonged, with no error. Hoisted to top level.
+- **The live-database and in-progress-download guards scanned only 3 levels deep.** Surveying real
+  cache trees shows SQLite databases sit at depth 6–10 below a cache root, so the guards missed the
+  large majority of what they exist to protect. Raised to 8; deeper costs nothing measurable.
+- `_hkb` renders `M` with one decimal, as it already did for `G`. Integer division printed 2000 KB
+  as `1M` beside `du -sh`'s `2.0M` for the same directory in the same report.
+- Three `~/.lmstudio/models` scans were unbounded; all are now depth-limited to the real layout.
+
+### Added
+- **`--apply` and `--scan` stress tests.** Real deletions against fixtures holding every category at
+  once, with guarded items placed *inside* directories that are genuinely deleted. The first version
+  was vacuous — removing each guard changed nothing, because the protected files were never in harm's
+  way. Fixing that immediately exposed the two nesting bugs above.
+- Orphaned-app-cache reporting is filtered: fail-closed under 10 resolvable apps, a 30-day age gate,
+  helper/updater bundles skipped, and directories named rather than counted. Before these, the only
+  result on the development machine was a false positive.
+- Stale login items, `nix-collect-garbage`, and Autodesk webdeploy (report-only).
+- `DEHOARD_SIZE_TIMEOUT`, `DEHOARD_XCODE_DEVICESUPPORT_KEEP`, `DEHOARD_DEBUG`.
+
+### Performance
+- One `lsof` snapshot per run instead of one probe per candidate: 4:02 → 10.5s over 20 calls.
+- Batched `stat` for multi-file deletions: 52.6s → 1.16s over 150 files.
+- `_mw_row` and the deletion path each ran `du` twice over the same tree for one figure.
+- The large-repository scan prunes `node_modules`/`.venv`/`target` instead of filtering after
+  descending into them: 3.4s → 1.1s for identical results.
+
+### Notes
+- Several `--report` sections are read-only **by design**, not by omission. Bundle-id to app mapping
+  cannot connect `com.getdropbox.dropbox` to `com.dropbox.DropboxUpdater`, and Autodesk's rules
+  cannot be tested on a machine without Autodesk installed.
+
 ## [0.2.8]: 2026-08-31
 
 ### Fixed
