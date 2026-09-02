@@ -36,7 +36,12 @@ S2.4  --scan / --pick stress test (only Tier 1 is stress-tested today)
 ## Sprint 3 - performance
 S3.1  C1 bulk `stat -f%z` batching for multi-path _rm calls
 S3.2  --report is 2-3 min on a real machine: profile, then bound the du sweep
-S3.3  C6 parallel sizing via FIFO semaphore (zsh has no `wait -n`)
+S3.3  DECLINED after measurement. A window-4 PID-array pool over 12 directories measured 0.191s
+      against 0.265s sequential - a 28% gain on a synthetic best case, and directory sizing is no
+      longer the dominant cost now that plain files are batched through one stat and the whole probe
+      is bounded by DEHOARD_SIZE_TIMEOUT. Concurrency in the code path that DELETES files buys
+      background jobs, PID bookkeeping and interrupt handling, and the orphaned-grandchild bug
+      already found in _run_timeout is exactly the failure mode it invites. Not worth 28%.
 
 ## Sprint 4 - coverage
 S4.1  Autodesk webdeploy (documented up to 60 GB)
