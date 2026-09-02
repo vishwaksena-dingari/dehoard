@@ -3,7 +3,19 @@
 Baseline: 8158f27, 175 assertions + 12 stress, CI green, v0.2.8 shipped.
 Rule for every task: implement, then verify by NEGATIVE CONTROL (break it, watch the test go red).
 
-## Sprint 1 - suite runtime: INVESTIGATED, CLOSED AS NOT ACTIONABLE
+## Sprint 1 - suite runtime: REOPENED AND FIXED (the close below was wrong)
+Root cause: SAFE_PATH claimed to exclude package managers, and did exclude brew/npm/go/uv/cargo -
+but pip3 and gem ship inside /usr/bin. Every --apply in the suite ran a REAL `pip3 cache purge`
+(4.89s) and `gem cleanup` (2.53s) against the developer's actual Python and Ruby installs. About
+100 invocations x 7.4s is ~12 minutes, spent mutating real state no test asserts on.
+Fix: a stub directory prepended to SAFE_PATH. Empty-fixture --apply: 7.7-14.6s -> 4.1-4.3s.
+
+The lesson is in the discarded reasoning below. I measured wildly inconsistent timings for the same
+command, called the variance "noise exceeding signal", and closed the question. The variance WAS the
+signal: a cold `pip3 cache purge` against a populated wheel cache is slow and variable, and that is
+precisely what it looked like.
+
+### superseded reasoning, kept deliberately
 Measured rather than assumed, and the assumptions were wrong:
 - 563 MB of `dd` fixtures cost 5.5s total, and `du` over them is 0.02s. Not the cause.
 - `_pm_run` already guards on `command -v`, so absent package managers cost nothing.
