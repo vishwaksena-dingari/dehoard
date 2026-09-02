@@ -43,7 +43,11 @@ S4.1  Autodesk webdeploy (documented up to 60 GB)
 S4.2  nix-collect-garbage
 S4.3  bounded artifact hints, sampled + honestly labelled "985.6MB+"
 S4.4  stale login items, report-only
-S4.5  4 disk-reclaiming optimize actions, NO sudo tier
+S4.5  DECLINED after measurement. Of the 22 optimize actions surveyed, only four reclaim disk at
+      all, and on this machine the largest of them - Saved Application State - is 12 KB. The rest
+      are DNS flushes, Spotlight reindexing and permission repairs: maintenance, not reclamation,
+      and several need sudo. dehoard never asking for sudo is a genuine differentiator worth
+      keeping, and a "cleaner" that flushes DNS is pretending to work. Not built.
 
 ## Sprint 5 - release
 S5.1  full Mole re-comparison, both fresh, same machine
