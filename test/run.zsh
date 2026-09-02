@@ -666,6 +666,22 @@ out=$(HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --report 2>/dev/null)
   || bad "partial sample not marked as a floor"
 rm -rf "$FIX"
 
+# --report must stay bounded. It is READ-ONLY, so a hang there is pure loss: no work is done and the
+# user is left staring at a stalled terminal. The home-directory walk is the dominant cost and was
+# entirely unbounded - with du stubbed to hang, --report took 308s against a 3s limit, because the
+# timeout had been applied to every OTHER sizing call but not to the first and largest one.
+FIX=$(mktemp -d); STUBD=$(mktemp -d)
+printf '#!/bin/sh\nsleep 300\n' > "$STUBD/du"; chmod +x "$STUBD/du"
+mkdir -p "$FIX/.cache/x"
+_t0=$SECONDS
+HOME="$FIX" DEHOARD_SWEEP_TIMEOUT=3 DEHOARD_SIZE_TIMEOUT=3 PATH="$STUBD:$SAFE_PATH" \
+  zsh "$SCRIPT" --report >/dev/null 2>&1
+_el=$(( SECONDS - _t0 ))
+(( _el < 90 )) \
+  && ok "--report stays bounded when du hangs (${_el}s, not 300)" \
+  || bad "--report hung for ${_el}s - an unbounded sizing call remains"
+rm -rf "$FIX" "$STUBD"
+
 # Arithmetic-injection guard. zsh evaluates a variable's VALUE inside $(( )) recursively, and
 # arithmetic supports assignment — so a numeric env var set to `(DRY_RUN=0)` clobbers the flag
 # _rm branches on and silently turns a PREVIEW run into a real deletion. Regression: the victim

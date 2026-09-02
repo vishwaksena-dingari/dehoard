@@ -36,6 +36,9 @@ GIT_GC_ROOTS=(~/Documents ~/src ~/Desktop ~/Developer "${EXTRA_SCAN_DIRS[@]}")
 # Seconds any single directory-size measurement may take before it is abandoned as "unknown".
 # Deletion still proceeds; only the reported figure is lost.
 : ${DEHOARD_SIZE_TIMEOUT:=20}
+# Seconds the --report cache-ranking sweep may take per root before it is abandoned. Exceeding it
+# shortens that section rather than producing a wrong figure.
+: ${DEHOARD_SWEEP_TIMEOUT:=45}
 # Seconds any single directory-size measurement may take before it is abandoned as "unknown".
 # Deletion still proceeds; only the reported figure is lost.
 : ${DEHOARD_SIZE_TIMEOUT:=20}
@@ -72,6 +75,7 @@ _num_or_default DEHOARD_PM_TIMEOUT 120
 _num_or_default DEHOARD_HELD_OPEN_MIN_GB 5
 _num_or_default DEHOARD_VM_IMAGE_MIN_MB 500
 _num_or_default DEHOARD_SIZE_TIMEOUT 20
+_num_or_default DEHOARD_SWEEP_TIMEOUT 45
 _num_or_default DEHOARD_SIZE_TIMEOUT 20
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -156,6 +160,7 @@ ENVIRONMENT
     DEHOARD_HELD_OPEN_MIN_GB    5      per-process floor (GB) for the held-open-files warning
     DEHOARD_VM_IMAGE_MIN_MB     500    minimum size (MB) for a VM/container disk image to be listed
     DEHOARD_SIZE_TIMEOUT        20     seconds before one directory-size probe is abandoned
+    DEHOARD_SWEEP_TIMEOUT       45     seconds before --report's cache-ranking sweep is abandoned
     DEHOARD_XCODE_DEVICESUPPORT_KEEP 2  iOS device-support versions to keep (1-3 GB each)
     DEHOARD_DEBUG               unset  set to any value to trace skipped paths on stderr
     DEHOARD_SIZE_TIMEOUT        20     seconds before one directory-size probe is abandoned
@@ -1695,14 +1700,24 @@ if $REPORT; then
   echo "   Scanning home directory (may take a minute)…"
   echo ""
   echo "$(c_head "━━ Top 30 biggest directories under ~ ━━")"
-  du -h -d 2 ~ 2>/dev/null | sort -rh | head -30
+  # THE dominant cost of --report: a depth-2 walk of the entire home directory. Measured at over
+  # two minutes on this machine, and it is the first thing the audit does, so a slow or stalled
+  # subtree makes a READ-ONLY report look hung before it prints anything useful. Unbounded, a dead
+  # network mount under ~ holds it open forever - demonstrated with a stubbed du that never returns.
+  # On timeout the section is short or empty, which is the right failure for a report: less
+  # information, never a wrong number, never an indefinite hang.
+  _run_timeout "${DEHOARD_SWEEP_TIMEOUT:-45}" du -h -d 2 ~ 2>/dev/null | sort -rh | head -30
 
   echo ""
   echo "$(c_head "━━ Regenerable caches present (SAFE to clean) ━━")"
   echo "   These are reclaimed by the flag shown; everything else above is your data."
   _report_cache() {  # $1=size-label path, $2=description, $3=flag that clears it
     [[ -e "$1" ]] || return
-    printf "  %-7s %-30s %s\n" "$(du -sh "$1" 2>/dev/null | cut -f1)" "$2" "$3"
+    # Bounded like every other sizing call here. _report_cache is invoked ~15 times per run, so an
+    # unbounded du in it can hold a read-only audit open indefinitely - which is exactly what a
+    # hung-du test demonstrated after the sweep alone was bounded: 308s instead of the 3s limit.
+    local _rk; _rk=$(_run_timeout "${DEHOARD_SIZE_TIMEOUT:-20}" du -sk "$1" 2>/dev/null | cut -f1)
+    printf "  %-7s %-30s %s\n" "$(_hkb "${_rk:-x}")" "$2" "$3"
   }
   _report_cache ~/Library/Caches                                                        "~/Library/Caches/*"   "--deep"
   _report_cache ~/Library/Application\ Support/Code/CachedExtensionVSIXs                 "VSCode ext cache"     "--deep"
@@ -1723,7 +1738,7 @@ if $REPORT; then
   #   measures ~0. Without a knob this branch could only ever be verified by hand.
   local _img _ikb _rel
   while IFS= read -r -d '' _img; do          # -print0/read -d '': "Application Support" has a space
-    _ikb=$(du -sk "$_img" 2>/dev/null | cut -f1)
+    _ikb=$(_run_timeout "${DEHOARD_SIZE_TIMEOUT:-20}" du -sk "$_img" 2>/dev/null | cut -f1)
     (( ${_ikb:-0} >= DEHOARD_VM_IMAGE_MIN_MB * 1024 )) || continue
     # Label with the owning APP (first component under Application Support), not the
     # immediate parent: "Claude" is actionable, "vm_bundles" is not.
@@ -1819,7 +1834,13 @@ if $REPORT; then
   # reading into it clobbers the command search path.
   for cache_root in ~/.cache ~/Library/Caches; do
     [[ -d "$cache_root" ]] || continue
-    du -sk "$cache_root"/*/ 2>/dev/null | sort -rn | head -8 | while read kb cdir; do
+    # Bounded. This walks every cache directory under the root to rank them, which on a real
+    # machine is the single most expensive thing --report does: measured 17.4s for ~/Library/Caches
+    # (8 GB here) and 5.3s for ~/.cache. That cost is inherent to ranking by size, but it should not
+    # be unbounded - a stalled network mount or a pathological tree would otherwise hold a READ-ONLY
+    # audit open indefinitely. On timeout the section is simply shorter, which is the right failure
+    # mode for a report: less information, never a wrong number and never a hang.
+    _run_timeout "${DEHOARD_SWEEP_TIMEOUT:-45}" du -sk "$cache_root"/*/ 2>/dev/null | sort -rn | head -8 | while read kb cdir; do
       (( kb >= CACHE_MIN_MB * 1024 )) && printf "  %-7s %-30s %s\n" \
         "$(_hkb "$kb")" "${cdir/#$HOME/~}" "--scan (generic)"
     done
@@ -1833,7 +1854,7 @@ if $REPORT; then
     [[ -f "$ext_dir/.obsolete" || -f "$ext_dir/extensions.json" ]] || continue
     _ed_found=true
     printf "  %-16s %6s  last changed %s\n" "${${ext_dir:h}:t}" \
-      "$(du -sh "$ext_dir" 2>/dev/null | cut -f1)" \
+      "$(_hkb "$(_run_timeout "${DEHOARD_SIZE_TIMEOUT:-20}" du -sk "$ext_dir" 2>/dev/null | cut -f1)")" \
       "$(stat -f '%Sm' -t '%Y-%m-%d' "$ext_dir" 2>/dev/null)"
   done
   $_ed_found || echo "  (no VS Code-family editors found)"
@@ -1943,13 +1964,13 @@ if $REPORT; then
   }
   for d in ~/.cache/huggingface/hub/models--*(N/); do
     nm="${${d:t}#models--}"; nm="${nm//--//}"
-    _mdl_add HF "$nm" "$(du -sk "$d" 2>/dev/null | cut -f1)" "$d"
+    _mdl_add HF "$nm" "$(_run_timeout "${DEHOARD_SIZE_TIMEOUT:-20}" du -sk "$d" 2>/dev/null | cut -f1)" "$d"
   done
   for f in ~/.lmstudio/models/**/*.gguf(N.); do
-    _mdl_add LMStudio "${f:t:r}" "$(du -sk "$f" 2>/dev/null | cut -f1)" "$f"
+    _mdl_add LMStudio "${f:t:r}" "$(_run_timeout "${DEHOARD_SIZE_TIMEOUT:-20}" du -sk "$f" 2>/dev/null | cut -f1)" "$f"
   done
   for f in ~/.cache/torch/hub/checkpoints/*(N.); do
-    _mdl_add PyTorch "${f:t:r}" "$(du -sk "$f" 2>/dev/null | cut -f1)" "$f"
+    _mdl_add PyTorch "${f:t:r}" "$(_run_timeout "${DEHOARD_SIZE_TIMEOUT:-20}" du -sk "$f" 2>/dev/null | cut -f1)" "$f"
   done
   if command -v ollama &>/dev/null; then
     # NOTE: declare these ONCE before the loop. A bare `local onm…` re-run each
@@ -1972,7 +1993,7 @@ if $REPORT; then
     if $_ollama_found && [[ -d ~/.ollama/models ]]; then
       # Sum the Ollama rows out of _mdl_list (entry = tool\tdisplay\tkb\tquant\tvariant\tpath).
       local _oll_real_kb _oll_sum_kb=0 _ok _oline; local -a _of
-      _oll_real_kb=$(du -sk ~/.ollama/models 2>/dev/null | cut -f1)
+      _oll_real_kb=$(_run_timeout "${DEHOARD_SIZE_TIMEOUT:-20}" du -sk ~/.ollama/models 2>/dev/null | cut -f1)
       for _ok in ${(k)_mdl_list}; do
         for _oline in "${(@f)${_mdl_list[$_ok]%$'\n'}}"; do
           _of=("${(@s:	:)_oline}")
@@ -2130,7 +2151,7 @@ if $REPORT; then
     _skip=false
     for _i in ${(k)_inst_bid}; do [[ "$_i" == "$_vendor".* ]] && { _skip=true; break }; done
     $_skip && continue
-    _ckb=$(du -sk "$_c" 2>/dev/null | cut -f1); (( _ckb >= 10240 )) || continue   # ignore <10MB noise
+    _ckb=$(_run_timeout "${DEHOARD_SIZE_TIMEOUT:-20}" du -sk "$_c" 2>/dev/null | cut -f1); (( _ckb >= 10240 )) || continue   # ignore <10MB noise
     _orphan_names+=("$_ckb|$_name")
     (( _orphan_cache_kb += _ckb, _orphan_cache_n++ ))
   done
