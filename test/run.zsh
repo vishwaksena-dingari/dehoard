@@ -15,7 +15,18 @@
 set -u
 SCRIPT="${0:A:h}/../dehoard.sh"
 [[ -f "$SCRIPT" ]] || { echo "cannot find dehoard.sh next to test/"; exit 2; }
-SAFE_PATH="/usr/bin:/bin:/usr/sbin:/sbin"   # excludes brew/npm/go/uv/cargo → guards skip them
+# A stub directory PREPENDED to the safe PATH, holding no-op versions of the package managers that
+# ship inside /usr/bin. The comment below used to claim this PATH excluded package managers, and it
+# excluded brew/npm/go/uv/cargo - but pip3 and gem live in /usr/bin, so every single --apply in this
+# suite ran a REAL `pip3 cache purge` (4.9s) and `gem cleanup` (2.5s) against the developer's actual
+# Python and Ruby installs. Roughly 100 invocations x 7.4s is about twelve minutes of the suite's
+# runtime, spent mutating real state the tests never asserted on.
+_PM_STUBS=$(mktemp -d)
+for _pm in pip pip3 gem; do
+  print -r -- $'#!/bin/sh
+exit 0' > "$_PM_STUBS/$_pm"; chmod +x "$_PM_STUBS/$_pm"
+done
+SAFE_PATH="$_PM_STUBS:/usr/bin:/bin:/usr/sbin:/sbin"   # excludes brew/npm/go/uv/cargo; pip/gem stubbed
 # Neutralise osascript for EVERY test, not just the stub-harness ones. It lives in /usr/bin,
 # which SAFE_PATH includes, so without this each run reaching print_result posts a real macOS
 # notification and one suite floods the developer's Notification Center with fixture figures.
@@ -38,7 +49,7 @@ SAFE_PATH="$_NOTIFY_STUB:$SAFE_PATH"
 # Tests that deliberately exercise a hostile or unset TMPDIR override this per-invocation.
 _FIXTURE_TMPDIR=$(mktemp -d)
 export TMPDIR="${_FIXTURE_TMPDIR%/}/"
-trap 'rm -rf "$_NOTIFY_STUB" "$_FIXTURE_TMPDIR"' EXIT INT TERM
+trap 'rm -rf "$_NOTIFY_STUB" "$_FIXTURE_TMPDIR" "$_PM_STUBS"' EXIT INT TERM
 
 # Canaries in the REAL environment. _assert_sandbox is wired into run(), but only 2 of ~100
 # invocations use run() — wrapping the other 98 would be fragile and a newly-written test would
