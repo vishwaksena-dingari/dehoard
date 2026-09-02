@@ -1781,6 +1781,39 @@ if $REPORT; then
     echo "$(c_dim "    launchctl bootout gui/\$UID ~/Library/LaunchAgents/<name>.plist && rm <plist>")"
   fi
 
+  # Build-artifact hint. --report never mentioned project artifacts at all, yet a single Rust
+  # target/ on this machine reached 8 GB repeatedly in one day - easily the largest reclaimable
+  # thing here and completely invisible in the audit that exists to surface exactly that.
+  #
+  # SAMPLED and BOUNDED on purpose. Sizing every artifact directory under $HOME is a multi-minute
+  # walk, and --report is already slow; an exact number is not worth that. At most 3 directories are
+  # measured, each with its own short timeout, under a total wall-clock budget. If the sample is
+  # incomplete the figure is labelled with a trailing "+" so it reads as a floor rather than a
+  # total. A bounded estimate that says so beats an exact number nobody waits for.
+  local -a _art=()
+  _art=($(find ~ -maxdepth 4 \( -name node_modules -o -name target -o -name .venv \) -type d \
+            -not -path "*/node_modules/*" -not -path "*/.venv/*" -print 2>/dev/null | head -40))
+  if (( ${#_art[@]} )); then
+    local _asum=0 _asampled=0 _akb _adl=$(( SECONDS + 6 ))
+    local _a
+    for _a in $_art; do
+      (( SECONDS >= _adl )) && break
+      (( _asampled >= 3 )) && break
+      _akb=$(_run_timeout 2 du -sk "$_a" 2>/dev/null | cut -f1)
+      [[ "$_akb" == <-> ]] || continue
+      (( _asum += _akb, _asampled++ ))
+    done
+    if (( _asum > 102400 )); then                       # only speak up above ~100 MB
+      local _plus=""; (( _asampled < ${#_art[@]} )) && _plus="+"
+      echo ""
+      echo "$(c_head "── Project build artifacts ──")"
+      printf "  %8s  %d director%s found, %d sampled\n" \
+        "$(_hkb "$_asum")$_plus" "${#_art[@]}" "$([[ ${#_art[@]} == 1 ]] && echo y || echo ies)" "$_asampled"
+      echo "$(c_dim "  node_modules / target / .venv. Regenerable by a rebuild. Sampled, so the")"
+      echo "$(c_dim "  figure is a floor, not a total. Review and remove with: dehoard --scan --pick --apply")"
+    fi
+  fi
+
   # Generic sweep: biggest entries in the XDG + macOS cache roots over 100 MB.
   # NOTE: loop var must NOT be named 'path', in zsh that is tied to $PATH and
   # reading into it clobbers the command search path.

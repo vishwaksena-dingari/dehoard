@@ -644,6 +644,28 @@ out=$(HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --report 2>&1)
   || bad "false positive: reported a bare-command login item"
 rm -rf "$FIX"
 
+# Build-artifact hint: sampled, bounded, and HONEST about being a floor. An exact total would mean
+# sizing every artifact tree under $HOME, which is a multi-minute walk in an already-slow --report.
+# The contract is that a partial sample is labelled with a trailing "+" so it never reads as a total.
+FIX=$(mktemp -d)
+for _i in 1 2 3; do mkdir -p "$FIX/p$_i/node_modules"; dd if=/dev/zero of="$FIX/p$_i/node_modules/b" bs=1024 count=50000 2>/dev/null; done
+out=$(HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --report 2>/dev/null)
+[[ "$out" == *"Project build artifacts"* ]] \
+  && ok "--report surfaces project build artifacts" \
+  || bad "build-artifact hint missing"
+[[ "$out" == *"3 sampled"* && "$out" != *"M+"* ]] \
+  && ok "a COMPLETE sample is reported without the '+' floor marker" \
+  || bad "complete sample was mislabelled as partial"
+rm -rf "$FIX"
+
+FIX=$(mktemp -d)
+for _i in 1 2 3 4 5; do mkdir -p "$FIX/p$_i/node_modules"; dd if=/dev/zero of="$FIX/p$_i/node_modules/b" bs=1024 count=50000 2>/dev/null; done
+out=$(HOME="$FIX" PATH="$SAFE_PATH" zsh "$SCRIPT" --report 2>/dev/null)
+[[ "$out" == *"M+"* && "$out" == *"5 director"* ]] \
+  && ok "a PARTIAL sample is labelled '+' so it reads as a floor, not a total" \
+  || bad "partial sample not marked as a floor"
+rm -rf "$FIX"
+
 # Arithmetic-injection guard. zsh evaluates a variable's VALUE inside $(( )) recursively, and
 # arithmetic supports assignment — so a numeric env var set to `(DRY_RUN=0)` clobbers the flag
 # _rm branches on and silently turns a PREVIEW run into a real deletion. Regression: the victim
