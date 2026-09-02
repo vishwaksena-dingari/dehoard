@@ -164,3 +164,74 @@ skipped, and anything already inside it is deleted for real.
   design question that argument alone could not.
 - **Report-only rules can be generic; deleting rules earn a hardcoded path.** A report false positive
   costs one line of stdout. A delete false positive costs data.
+
+## 12. A guard that is never in harm's way tests nothing
+
+The `--apply` stress test's first version asserted that keychains, ssh keys and open databases
+survived a real run. Every assertion passed. Removing the deny overlay, the download skip and the
+database guard — one at a time — changed **nothing**: still all green.
+
+The protected files survived because Tier 1 never targets those paths, not because any guard ran.
+Moving them *inside* directories that Tier 1 genuinely deletes turned the test real, and it failed
+immediately on two counts. Both were live bugs.
+
+**Rule:** a safety test must place the protected thing where the deletion actually goes. If removing
+the guard does not turn the test red, the test is decoration.
+**Locked by:** `test/stress-apply.zsh` — the live database and the partial download sit inside
+`~/.npm/_npx` and `~/.cache/node`, which are real Tier 1 targets.
+
+## 13. Depth guesses are always too shallow
+
+The live-database guard scanned `maxdepth 1`, which protected nothing, because Tier 1 removes whole
+directories. Corrected to `maxdepth 3` on the reasoning that a database sits "one or two levels in".
+
+Surveying the machine's actual cache trees: SQLite databases sit at **depth 6 to 10** below a cache
+root. Depth 3 still missed the large majority. Depth costs nothing — `maxdepth` 3, 6 and 8 over a
+real cache directory returned identical hits in 0.3–0.7s, entirely noise.
+
+**Rule:** measure the real distribution before picking a bound. The fixture that passes is the one
+built to match the assumption.
+**Locked by:** stress fixtures nest at depth 6 and 4; reverting to `maxdepth 3` fails 3 assertions.
+
+## 14. The run log must never name the wrong file
+
+`_rm` resolved its display path in the **validation** loop, which completes over every target before
+deletion begins. So the "removed:" line held the last target's value, and deleting three files
+logged the third one three times. Shipped in 0.2.8.
+
+A log that names the wrong file is worse than one that names none: it is the only record of an
+irreversible act, and it was confidently wrong. It surfaced only because batched sizes were correct
+while the paths were identical — the right sizes are what made the wrong paths visible.
+
+**Rule:** anything printed about a deletion is derived at the point of deletion, never earlier.
+**Locked by:** a test asserting three deleted files each appear in their own log line.
+
+## 15. A nested helper is invisible to everything outside its parent
+
+`_hkb` was defined inside `run_report`. Callers outside it — including `_rm`'s deletion line — got an
+empty string. So did callers *earlier in `run_report` than the definition*, because a nested function
+does not exist until its definition has executed. A blank appeared where a size belonged, silently.
+
+**Rule:** helpers used by more than one caller are defined at top level, before first use.
+
+## Meta-lessons, second set
+
+- **Variance is evidence, not an excuse to stop.** The suite's runtime was written off as "noise
+  exceeding signal" after the same command measured 7.8s, 14s, 20s and 44s. The noise *was* the
+  finding: `SAFE_PATH` let `pip3` and `gem` through from `/usr/bin`, so every `--apply` ran a real
+  `pip3 cache purge` (4.89s) and `gem cleanup` (2.53s) — about twelve minutes per suite, mutating
+  real state no test asserted on.
+- **Grep finds the bug you already imagined.** Chasing a `--report` hang, eight `du` calls were
+  bounded across three attempts and a stubbed hanging `du` still produced 308s every time. The
+  greps matched `du -sk` and `du -sh`; the offending call was `du -h -d 2`. Watching *where the
+  output stopped* found it in one step.
+- **Three wrong diagnoses beat one confident fix.** A stall was blamed on `git gc` (1.7s, measured),
+  on `du` of an empty directory (3 ms, measured), and on self-inflicted process contention — before
+  timing `docker info` directly, which hung for 300s. Measure the suspect, not the neighbourhood.
+- **Revert an optimisation that measures worse, however good the reasoning.** Skipping the app
+  sandbox container trees in the home scan was sound in theory: they are slow *and* dehoard never
+  cleans them. It measured 437s against a 139–158s baseline. One `du` traversing once beats N
+  invocations each re-walking a child. Complexity has to earn its place with a number.
+- **An unexplained change that deletes real files does not ship**, regardless of motivation. C4 was
+  reverted on the belief it caused real deletions; the belief was wrong, but reverting on an
+  unexplained deletion was still correct. It re-landed once the cause was actually understood.
